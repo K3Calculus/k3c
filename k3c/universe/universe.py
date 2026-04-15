@@ -18,6 +18,7 @@ from __future__ import annotations
 import sys
 from copy import deepcopy
 from dataclasses import dataclass, field
+from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING, Callable, Protocol, cast
 
 if TYPE_CHECKING:
@@ -194,8 +195,11 @@ class Universe:
             self._ctx = result.ctx
         return result
 
-    def reduce(self, events: list[dict[str, object]]) -> K3Result[dict[str, object]]:
+    def reduce(self, events: Iterable[dict[str, object]]) -> K3Result[dict[str, object]]:
         """Fold event stream through apply(). Stops on first non-Ok.
+
+        Accepts any iterable — lists, generators, file-backed streams.
+        Constant memory when used with a generator.
 
         Returns the last K3Result — Ok if all succeeded, or the first
         Impossible/Violated that stopped the fold.
@@ -209,8 +213,11 @@ class Universe:
                 return result
         return result
 
-    def reduce_all(self, events: list[dict[str, object]]) -> ReduceAllResult:
+    def reduce_all(self, events: Iterable[dict[str, object]]) -> ReduceAllResult:
         """Process all events. Skip Impossible, stop on Violated.
+
+        Accepts any iterable — lists, generators, file-backed streams.
+        Constant memory when used with a generator.
 
         Returns ReduceAllResult with final state, count of processed events,
         and list of skipped Impossible events with their indices.
@@ -235,6 +242,35 @@ class Universe:
                 )
 
         return ReduceAllResult(final=last_ok, processed=processed, skipped=skipped)
+
+    def stream(
+        self, events: Iterable[dict[str, object]]
+    ) -> Iterator[K3Result[dict[str, object]]]:
+        """Yield each apply() result from the event stream.
+
+        Like reduce_all but yields every intermediate K3Result so the
+        caller can inspect projections and outputs per event. State
+        advances on Ok, stays unchanged on Impossible. Stops on Violated
+        (yields the Violated, then returns).
+
+        Constant memory when events is a generator.
+
+        Usage:
+            for result in u.stream(events_from_disk()):
+                match result:
+                    case Ok(projections=p, outputs=o):
+                        for out in o:
+                            emit(out)
+                    case Impossible():
+                        pass  # skipped
+                    case Violated(why=w):
+                        alert(w)
+        """
+        for event in events:
+            result = self.apply(event)
+            yield result
+            if isinstance(result, Violated):
+                return
 
     def reset(self) -> None:
         """Reset state and ctx to initial. Start a new session."""
@@ -408,7 +444,33 @@ class ParallelReduceResult:
         ]
 
 
-# ── Worker function (must be top-level for pickling) ────────────────────────
+# ── Chunk source type ───────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ChunkSource:
+    """A lazy event producer — invoked by workers to stream events from disk.
+
+    Used by parallel_reduce to avoid materializing all events in memory.
+    Each worker calls the ChunkSource to lazily stream events on demand.
+
+    Example — read a byte range from an SSIM file::
+
+        def read_range(path, start, end, decode):
+            with open(path, 'rb') as f:
+                f.seek(start * 201)
+                for _ in range(start, end):
+                    yield decode(f.read(201)[:200])
+
+        source = ChunkSource(produce=lambda: read_range(path, 0, 1000, decode))
+    """
+
+    produce: Callable[[], Iterable[dict[str, object]]]
+
+    def __call__(self) -> Iterable[dict[str, object]]:
+        return self.produce()
+
+# ── Worker functions (must be top-level for pickling) ─────────────────────
 
 
 def _reduce_chunk(
@@ -417,15 +479,57 @@ def _reduce_chunk(
     chunk: list[dict[str, object]],
     hash_fn: str,
 ) -> ReduceAllResult:
-    """Process one chunk in a worker. Creates its own Universe."""
+    """Process one materialized chunk in a worker. Creates its own Universe."""
     u = universe(system, spec, hash_fn=hash_fn)
     return u.reduce_all(chunk)
+
+
+def _reduce_chunk_source(
+    system: System,
+    spec: K3Spec,
+    source: ChunkSource,
+    hash_fn: str,
+) -> ReduceAllResult:
+    """Process a ChunkSource in a worker. Invokes source() to stream events."""
+    u = universe(system, spec, hash_fn=hash_fn)
+    return u.reduce_all(source())
+
+
+def _run_chunk_sequential(
+    system: System,
+    spec: K3Spec,
+    chunk: list[dict[str, object]] | ChunkSource,
+    hash_fn: str,
+) -> ReduceAllResult:
+    """Run a single chunk sequentially, dispatching to the right function."""
+    if isinstance(chunk, ChunkSource):
+        return _reduce_chunk_source(system, spec, chunk, hash_fn)
+    return _reduce_chunk(system, spec, chunk, hash_fn)
+
+
+def _resolve_chunks(
+    specs: list[K3Spec],
+    chunks: list[list[dict[str, object]] | ChunkSource],
+) -> tuple[list[K3Spec], list[list[dict[str, object]]], list[K3Spec], list[ChunkSource]]:
+    """Split mixed chunks into separate lists for dispatch."""
+    list_specs: list[K3Spec] = []
+    list_chunks: list[list[dict[str, object]]] = []
+    source_specs: list[K3Spec] = []
+    source_chunks: list[ChunkSource] = []
+    for spec, chunk in zip(specs, chunks):
+        if isinstance(chunk, ChunkSource):
+            source_specs.append(spec)
+            source_chunks.append(chunk)
+        else:
+            list_specs.append(spec)
+            list_chunks.append(chunk)
+    return list_specs, list_chunks, source_specs, source_chunks
 
 
 def _parallel_execute(
     system: System,
     specs: list[K3Spec],
-    chunks: list[list[dict[str, object]]],
+    chunks: list[list[dict[str, object]] | ChunkSource],
     workers: int,
     hash_fn: str,
 ) -> list[ReduceAllResult]:
@@ -437,27 +541,44 @@ def _parallel_execute(
     """
     max_workers = min(workers, len(chunks))
 
+    # Separate lists and sources so each dispatches to the correctly-typed worker
+    list_specs, list_chunks, source_specs, source_chunks = _resolve_chunks(
+        specs, chunks
+    )
+
     if sys.version_info >= (3, 14):
         try:
-            from concurrent.interpreters import InterpreterPoolExecutor
+            from concurrent.futures import InterpreterPoolExecutor
 
             with InterpreterPoolExecutor(max_workers=max_workers) as pool:
-                futures = [
-                    pool.submit(_reduce_chunk, system, spec, chunk, hash_fn)
-                    for spec, chunk in zip(specs, chunks)
+                list_futures = [
+                    pool.submit(_reduce_chunk, system, s, c, hash_fn)
+                    for s, c in zip(list_specs, list_chunks)
                 ]
-                return [f.result() for f in futures]
+                source_futures = [
+                    pool.submit(_reduce_chunk_source, system, s, c, hash_fn)
+                    for s, c in zip(source_specs, source_chunks)
+                ]
+                return [f.result() for f in list_futures] + [
+                    f.result() for f in source_futures
+                ]
         except ImportError:
             pass  # fall through to ProcessPoolExecutor
 
     from concurrent.futures import ProcessPoolExecutor
 
     with ProcessPoolExecutor(max_workers=max_workers) as pool:
-        futures = [
-            pool.submit(_reduce_chunk, system, spec, chunk, hash_fn)
-            for spec, chunk in zip(specs, chunks)
+        list_futures = [
+            pool.submit(_reduce_chunk, system, s, c, hash_fn)
+            for s, c in zip(list_specs, list_chunks)
         ]
-        return [f.result() for f in futures]
+        source_futures = [
+            pool.submit(_reduce_chunk_source, system, s, c, hash_fn)
+            for s, c in zip(source_specs, source_chunks)
+        ]
+        return [f.result() for f in list_futures] + [
+            f.result() for f in source_futures
+        ]
 
 
 # ── parallel_reduce ─────────────────────────────────────────────────────────
@@ -466,7 +587,7 @@ def _parallel_execute(
 def parallel_reduce(
     system: System,
     specs: list[K3Spec],
-    chunks: list[list[dict[str, object]]],
+    chunks: list[list[dict[str, object]] | ChunkSource],
     *,
     workers: int = 4,
     hash_fn: str = "sha256",
@@ -478,7 +599,9 @@ def parallel_reduce(
 
     system: provides transition(state, event) → new_state
     specs: one K3Spec per chunk (from spec.slice())
-    chunks: one event list per spec
+    chunks: one event list or ChunkSource per spec. A ChunkSource is a
+            callable returning an Iterable[dict] — used for streaming from
+            disk without materializing all events in memory.
     workers: number of parallel workers
     hash_fn: hash algorithm for all workers
 
@@ -486,11 +609,16 @@ def parallel_reduce(
       - Violated from any chunk is captured
       - Ok chunks produce independent final states
 
-    Example:
+    Example with materialized lists:
         leg_specs = [unified_spec.slice(from_state=cp) for cp in checkpoints]
         result = parallel_reduce(MySystem(), leg_specs, chunks, workers=8)
-        if result.passed:
-            print(f"Processed {result.total_processed} events")
+
+    Example with ChunkSource for streaming from disk:
+        def make_source(path, start, end):
+            return lambda: read_records(path, start, end)
+
+        sources = [make_source(path, s, e) for s, e in boundaries]
+        result = parallel_reduce(MySystem(), specs, sources, workers=8)
     """
     if len(specs) != len(chunks):
         msg = f"specs and chunks must have same length: {len(specs)} != {len(chunks)}"
@@ -499,7 +627,7 @@ def parallel_reduce(
     if workers <= 1 or len(chunks) <= 1:
         # Sequential fallback — no overhead
         results = [
-            _reduce_chunk(system, spec, chunk, hash_fn)
+            _run_chunk_sequential(system, spec, chunk, hash_fn)
             for spec, chunk in zip(specs, chunks)
         ]
     else:

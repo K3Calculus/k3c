@@ -1,0 +1,709 @@
+{
+  "@context": {
+    "@vocab": "https://activeflights.com/specs/v1/",
+    "ssim": "https://activeflights.com/specs/v1/ssim/",
+    "iata": "https://iata.org/",
+    "schema": "https://schema.org/",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "CoreSpec": "https://activeflights.com/specs/v1/CoreSpec",
+    "Field": "https://activeflights.com/specs/v1/Field",
+    "FieldEntity": "https://activeflights.com/specs/v1/FieldEntity",
+    "Validation": "https://activeflights.com/specs/v1/Validation",
+    "SemanticRule": "https://activeflights.com/specs/v1/SemanticRule",
+    "Codec": "https://activeflights.com/specs/v1/Codec",
+    "Relationship": "https://activeflights.com/specs/v1/Relationship",
+    "Extension": "https://activeflights.com/specs/v1/Extension",
+    "id": "@id",
+    "type": "@type",
+    "version": "schema:version",
+    "name": "schema:name",
+    "description": "schema:description",
+    "hasField": "https://activeflights.com/specs/v1/hasField",
+    "hasValidation": "https://activeflights.com/specs/v1/hasValidation",
+    "hasSemanticRule": "https://activeflights.com/specs/v1/hasSemanticRule",
+    "hasExtension": "https://activeflights.com/specs/v1/hasExtension",
+    "relatesTo": "https://activeflights.com/specs/v1/relatesTo",
+    "fieldType": "https://activeflights.com/specs/v1/fieldType",
+    "position": "https://activeflights.com/specs/v1/position",
+    "required": "https://activeflights.com/specs/v1/required",
+    "pattern": "https://activeflights.com/specs/v1/pattern",
+    "allowedValues": "https://activeflights.com/specs/v1/allowedValues",
+    "constantValue": "https://activeflights.com/specs/v1/constantValue",
+    "aiNotes": "https://activeflights.com/specs/v1/aiNotes",
+    "trainingExamples": "https://activeflights.com/specs/v1/trainingExamples",
+    "semantics": "https://activeflights.com/specs/v1/semantics"
+  },
+  "@type": "RecordSpecification",
+  "sharedVocabulary": {
+    "@ref": "./shared.vocabulary.jsonld",
+    "description": "References common field definitions, types, and patterns"
+  },
+  "@id": "ssim.ch7.record_type_1",
+  "name": "Header Record (Record Type 1)",
+  "version": "1.0.0",
+  "specType": "core",
+  "description": "The Header Record (RT1) is the first record in every SSIM Chapter 7 dataset. It identifies the dataset as a valid SSIM file and optionally declares the number of seasons that follow. This record ensures correct interpretation of all subsequent records (RT2-RT5) and provides a standardized entry point for SSIM file processing. RT1 is a 1000-byte logical block (1 data record + 4 zero-padding records) per SSIM Chapter 7 block alignment requirements.",
+  "aiNotes": "The Header Record (RT1) is the mandatory first record in any SSIM file. Think of it as the 'table of contents' or 'file signature' that validates the dataset. Key points:\n\n1. ALWAYS appears first (record_serial_number = 000001)\n2. Contains the exact text 'AIRLINE STANDARD SCHEDULE DATA SET' at bytes 2-35\n3. Optionally specifies number of seasons (typically 1 or 2, or blank)\n4. Fixed 200-byte length like all SSIM records\n5. Must be followed by zero or more RT2 (Carrier) records, then RT5 (Trailer)\n\nExample workflow:\n- Parse RT1 → Validate it's a proper SSIM file\n- Read number_of_seasons if present\n- Process RT2/RT3/RT4 records\n- Validate RT5 trailer matches expectations\n\nCommon use cases:\n- File validation before processing\n- Dataset provenance and audit trails\n- Season-based schedule organization\n- Multi-carrier schedule distribution",
+  "iataChapter": "7.5.1",
+  "iataVersion": "2025.35",
+  "recordType": 1,
+  "metadata": {
+    "encoding": {
+      "allowed": [
+        "ASCII",
+        "EBCDIC"
+      ],
+      "ascii": {
+        "blank_hex": "0x20",
+        "zero_hex": "0x30"
+      },
+      "ebcdic": {
+        "blank_hex": "0x40",
+        "zero_hex": "0xF0"
+      }
+    },
+    "statusLegend": {
+      "M": "Mandatory",
+      "C": "Conditional",
+      "O": "Optional"
+    },
+    "conventions": {
+      "positions": "Byte positions are 1-based and inclusive",
+      "padding": "Unless noted, blanks are used to pad unused bytes",
+      "fill_rules": {
+        "blank": "Fill with space characters",
+        "zero": "Fill with numeric zeroes"
+      },
+      "alignment": {
+        "left": "Left-justify content; pad on the right",
+        "right": "Right-justify content; pad on the left"
+      }
+    }
+  },
+  "codec": {
+    "@type": "Codec",
+    "codecType": "fixed_width",
+    "length": 200,
+    "byteOrder": "big-endian",
+    "encoding": "ASCII",
+    "recordTerminator": null,
+    "notes": "All SSIM records are exactly 200 bytes. Files are organized in 1000-byte blocks with padding records filling unused space."
+  },
+  "fields": [
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_1#record_type",
+      "name": "record_type",
+      "fieldType": "string",
+      "position": {
+        "start": 0,
+        "end": 0,
+        "length": 1
+      },
+      "required": true,
+      "constantValue": "1",
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "description": "Identifies the record as Header (Record Type 1). Always contains the character '1'.",
+      "documentation": "This field serves as the record type discriminator. When parsing SSIM files, this byte determines which parser to use. RT1 must always be the first record in the file.",
+      "aiNotes": "Record type identifier. Always '1' for Header records. Use this to route to the correct parser.",
+      "validation": {
+        "type": "constant",
+        "value": "1",
+        "errorMessage": "Header record must have record_type = '1'"
+      },
+      "examples": [
+        "1"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_1#title_of_contents",
+      "name": "title_of_contents",
+      "fieldType": "string",
+      "position": {
+        "start": 1,
+        "end": 34,
+        "length": 34
+      },
+      "required": true,
+      "constantValue": "AIRLINE STANDARD SCHEDULE DATA SET",
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "description": "Must read exactly as specified: 'AIRLINE STANDARD SCHEDULE DATA SET' (34 characters, bytes 2-35). This serves as the file signature to validate that the dataset conforms to IATA SSIM standards.",
+      "documentation": "This is the 'magic string' that identifies a valid SSIM file. Analogous to file magic numbers (e.g., PNG files starting with '89 50 4E 47'). If this field doesn't match exactly, the file is not a valid SSIM dataset.",
+      "aiNotes": "SSIM file signature. This exact text MUST appear at bytes 2-35. If it doesn't match, reject the file as invalid SSIM format. Left-aligned, blank-padded if needed (though standard text is exactly 34 chars).",
+      "validation": {
+        "type": "constant",
+        "value": "AIRLINE STANDARD SCHEDULE DATA SET",
+        "errorMessage": "Header must contain exact text 'AIRLINE STANDARD SCHEDULE DATA SET' at bytes 2-35"
+      },
+      "examples": [
+        "AIRLINE STANDARD SCHEDULE DATA SET"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_1#spare_1",
+      "name": "spare_1",
+      "fieldType": "string",
+      "position": {
+        "start": 35,
+        "end": 39,
+        "length": 5
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "fillRule": "blank",
+      "description": "Reserved field for future use. Must be blank-filled (5 bytes of spaces).",
+      "documentation": "Reserved bytes for potential future SSIM extensions. Always blank in current spec. Parsers should ignore content but validators should ensure it's blank.",
+      "aiNotes": "Reserved/spare field. Always 5 blanks. Ignore when parsing, but validate it's blank for strict compliance.",
+      "validation": {
+        "type": "blank_fill",
+        "length": 5,
+        "errorMessage": "spare_1 must be 5 blank characters"
+      },
+      "examples": [
+        "     "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_1#number_of_seasons",
+      "name": "number_of_seasons",
+      "fieldType": "string",
+      "position": {
+        "start": 40,
+        "end": 40,
+        "length": 1
+      },
+      "required": false,
+      "status": "O",
+      "alignment": "left",
+      "padding": "blank",
+      "fillRule": "blank",
+      "allowedValues": [
+        " ",
+        "1",
+        "2"
+      ],
+      "description": "Optional indicator for the number of seasons that follow. If not used, must be blank. When present, typically '1' or '2'. A 'season' represents a distinct schedule period (e.g., Summer 2024, Winter 2024/25).",
+      "documentation": "Seasons allow airlines to group schedules by operational periods. Summer/Winter seasons align with IATA season definitions. If blank, the dataset contains schedules without explicit season grouping. If '1' or '2', the file contains that many distinct seasonal schedule blocks.",
+      "aiNotes": "Optional season count. Values:\n- ' ' (blank) = No explicit seasons (default)\n- '1' = Single season dataset\n- '2' = Two seasons (e.g., current + next season)\n\nSeasons follow IATA definitions:\n- Summer: Last Sunday in March to last Saturday in October\n- Winter: Last Sunday in October to last Saturday in March\n\nIf present, validate that the dataset actually contains that many season blocks.",
+      "validation": {
+        "type": "enum",
+        "allowedValues": [
+          " ",
+          "1",
+          "2"
+        ],
+        "errorMessage": "number_of_seasons must be blank, '1', or '2'"
+      },
+      "examples": [
+        " ",
+        "1",
+        "2"
+      ],
+      "relatesTo": {
+        "@type": "SemanticRule",
+        "target": "ssim.ch7.record_type_2",
+        "relationship": "declares_season_count_for",
+        "description": "If number_of_seasons is '1' or '2', the dataset must contain that many distinct season sections in subsequent RT2 records"
+      }
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_1#spare_2",
+      "name": "spare_2",
+      "fieldType": "string",
+      "position": {
+        "start": 41,
+        "end": 190,
+        "length": 150
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "fillRule": "blank",
+      "description": "Reserved field for future use. Must be blank-filled (150 bytes of spaces).",
+      "documentation": "Large reserved block (150 bytes) for potential future SSIM extensions. The significant size suggests room for substantial future enhancements while maintaining backward compatibility.",
+      "aiNotes": "Large reserved block. Always 150 blanks. Skip when parsing (just advance byte pointer), but validate it's all blanks for strict compliance.",
+      "validation": {
+        "type": "blank_fill",
+        "length": 150,
+        "errorMessage": "spare_2 must be 150 blank characters"
+      },
+      "examples": [
+        "                                                                                                                                                      "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_1#data_set_serial_number",
+      "name": "data_set_serial_number",
+      "fieldType": "integer",
+      "position": {
+        "start": 191,
+        "end": 193,
+        "length": 3
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "right",
+      "padding": "zero",
+      "format": {
+        "zeroPad": 3,
+        "radix": 10
+      },
+      "range": {
+        "min": 1,
+        "max": 999
+      },
+      "description": "Three-digit data set serial number; right-justified, zero-filled (001-999). Uniquely identifies this dataset instance from the same source.",
+      "documentation": "Sequential dataset identifier. Used to track different versions or editions of schedules from the same carrier. For example, if an airline issues weekly schedule updates, each file would have an incrementing serial number. Wraps at 999 back to 001.",
+      "aiNotes": "Dataset version/serial number. Range: 001-999.\n\nUsage:\n- Airlines issue periodic schedule updates (daily, weekly, monthly)\n- Each new issue increments this number\n- Enables tracking which schedule version you're processing\n- Wraps at 999 → 001\n\nExample: Qantas issues schedule on Jan 1 (serial 123), Jan 8 (serial 124), etc.\n\nFormat: Zero-padded 3 digits (e.g., '001', '042', '999')",
+      "validation": {
+        "type": "range",
+        "min": 1,
+        "max": 999,
+        "errorMessage": "data_set_serial_number must be between 1 and 999"
+      },
+      "examples": [
+        "001",
+        "042",
+        "123",
+        "999"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_1#record_serial_number",
+      "name": "record_serial_number",
+      "fieldType": "integer",
+      "position": {
+        "start": 194,
+        "end": 199,
+        "length": 6
+      },
+      "required": true,
+      "constantValue": 1,
+      "status": "M",
+      "alignment": "right",
+      "padding": "zero",
+      "format": {
+        "zeroPad": 6,
+        "radix": 10
+      },
+      "description": "Record serial number within the file. For Header record (RT1), this is always 000001. Subsequent records (RT2, RT3, RT4, RT5) increment sequentially.",
+      "documentation": "Sequential record counter within the SSIM file. RT1 always has record_serial_number = 1 (formatted as '000001'). Each subsequent record increments: RT2 might be 000002, first RT3 might be 000003, etc. Used for record ordering and validation.\n\nSpecial case: If a file exceeds 999,999 records, numbering wraps to 000002 (skipping 000001 which is reserved for RT1).",
+      "aiNotes": "Record counter within file. RT1 ALWAYS has value 1 (formatted '000001').\n\nSequencing:\n- RT1: 000001 (this record)\n- RT2: 000002 (first carrier)\n- RT3: 000003 (first flight leg)\n- RT3: 000004 (second flight leg)\n- ...\n- RT5: 999999 (trailer, if file is huge)\n\nValidation:\n- RT1 must be exactly 1\n- Subsequent records should increment\n- If file > 999,999 records, wrap to 000002 (not 000001!)\n\nUse for:\n- File integrity checks\n- Record ordering\n- Jump to specific record by number",
+      "validation": {
+        "type": "constant",
+        "value": 1,
+        "errorMessage": "Header record must have record_serial_number = 1 (formatted as '000001')"
+      },
+      "examples": [
+        "000001"
+      ]
+    }
+  ],
+  "validations": [
+    {
+      "@type": "Validation",
+      "@id": "ssim.ch7.record_type_1#validation_fixed_length",
+      "name": "fixed_length",
+      "validationType": "length",
+      "rule": {
+        "equals": 200
+      },
+      "errorMessage": "Header record must be exactly 200 bytes",
+      "severity": "error"
+    },
+    {
+      "@type": "Validation",
+      "@id": "ssim.ch7.record_type_1#validation_required_constants",
+      "name": "required_constants",
+      "validationType": "constant_fields",
+      "fields": [
+        {
+          "field": "record_type",
+          "value": "1"
+        },
+        {
+          "field": "title_of_contents",
+          "value": "AIRLINE STANDARD SCHEDULE DATA SET"
+        },
+        {
+          "field": "record_serial_number",
+          "value": 1
+        }
+      ],
+      "errorMessage": "Required constant fields do not match expected values",
+      "severity": "error"
+    },
+    {
+      "@type": "Validation",
+      "@id": "ssim.ch7.record_type_1#validation_padding_rules",
+      "name": "padding_rules",
+      "validationType": "padding",
+      "fields": [
+        {
+          "field": "spare_1",
+          "fill": "blank",
+          "length": 5
+        },
+        {
+          "field": "spare_2",
+          "fill": "blank",
+          "length": 150
+        }
+      ],
+      "errorMessage": "Spare fields must be blank-filled",
+      "severity": "warning"
+    }
+  ],
+  "semanticRules": [
+    {
+      "@type": "SemanticRule",
+      "@id": "ssim.ch7.record_type_1#sr_number_of_seasons_consistency",
+      "name": "number_of_seasons_consistency",
+      "description": "If number_of_seasons is '1' or '2', dataset must contain that many distinct season header sections following RT1.",
+      "appliesWhen": {
+        "field": "number_of_seasons",
+        "notIn": [
+          " "
+        ]
+      },
+      "checkType": "external",
+      "validationLogic": "Count distinct season markers in subsequent RT2 records and verify count matches number_of_seasons",
+      "errorMessage": "Number of seasons declared in RT1 does not match actual season count in dataset",
+      "severity": "error"
+    },
+    {
+      "@type": "SemanticRule",
+      "@id": "ssim.ch7.record_type_1#sr_header_first_record",
+      "name": "header_first_record",
+      "description": "Header (RT1) must be the first record in the dataset and its record_serial_number must equal 1.",
+      "checkType": "external",
+      "validationLogic": "Verify RT1 appears at file offset 0 and record_serial_number = 000001",
+      "errorMessage": "Header record must be the first record in the file with record_serial_number = 000001",
+      "severity": "error"
+    },
+    {
+      "@type": "SemanticRule",
+      "@id": "ssim.ch7.record_type_1#sr_record_serial_overflow",
+      "name": "record_serial_overflow",
+      "description": "Record Serial Numbers are 6-digit numeric fields (000001-999999). If the record count exceeds 999999, numbering must restart at 000002 because 000001 is reserved for the Header Record (RT1).",
+      "checkType": "external",
+      "validationLogic": "If file has > 999,999 records, verify numbering wraps to 000002 (not 000001)",
+      "errorMessage": "Record serial number overflow handling is incorrect",
+      "severity": "error"
+    }
+  ],
+  "relationships": [
+    {
+      "@type": "Relationship",
+      "source": "ssim.ch7.record_type_1",
+      "target": "ssim.ch7.record_type_2",
+      "relationship": "followed_by",
+      "cardinality": "1:N",
+      "description": "RT1 is followed by zero or more RT2 (Carrier) records",
+      "navigable": true
+    },
+    {
+      "@type": "Relationship",
+      "source": "ssim.ch7.record_type_1",
+      "target": "ssim.ch7.record_type_5",
+      "relationship": "paired_with",
+      "cardinality": "1:1",
+      "description": "Each RT1 (Header) has a corresponding RT5 (Trailer) that closes the dataset",
+      "navigable": true
+    }
+  ],
+  "extensions": [
+    {
+      "@type": "Extension",
+      "@id": "ssim.ch7.record_type_1#ext_processing_metadata",
+      "name": "processing_metadata",
+      "description": "Metadata about the parsing/processing of this SSIM file. Populated by the parser at ingestion time to provide audit trail, debugging context, and file provenance.",
+      "extensionType": "object",
+      "loadingStrategy": "computed",
+      "properties": {
+        "source_file": {
+          "type": "string",
+          "description": "Original filename (e.g., 'QF_SSIM_2024W.txt')"
+        },
+        "file_size_bytes": {
+          "type": "integer",
+          "description": "Size of the source file in bytes"
+        },
+        "file_checksum": {
+          "type": "string",
+          "description": "SHA-256 checksum of the source file for integrity verification"
+        },
+        "parsed_at": {
+          "type": "string",
+          "format": "iso8601",
+          "description": "ISO 8601 timestamp when file was parsed (e.g., '2025-10-03T14:30:00Z')"
+        },
+        "parser_version": {
+          "type": "string",
+          "description": "Version of af_specs parser used (e.g., '0.1.0')"
+        },
+        "encoding_detected": {
+          "type": "string",
+          "enum": [
+            "ASCII",
+            "EBCDIC"
+          ],
+          "description": "Character encoding detected from file analysis"
+        },
+        "total_records": {
+          "type": "integer",
+          "description": "Total number of records in the file (including RT1 and RT5)"
+        },
+        "tenant_id": {
+          "type": "string",
+          "description": "Active Flights tenant ID that owns this data"
+        }
+      },
+      "notes": [
+        "This field is NOT encoded in the 200-byte fixed-width RT1 record",
+        "It is populated by the parser during ingestion",
+        "Useful for debugging, audit trails, and data lineage",
+        "Can be stored in event metadata or database columns",
+        "Parser version enables tracking which codegen version created the data"
+      ],
+      "exampleValue": {
+        "source_file": "QF_SSIM_2024W.txt",
+        "file_size_bytes": 1234567,
+        "file_checksum": "sha256:abc123def456...",
+        "parsed_at": "2025-10-03T14:30:00Z",
+        "parser_version": "0.1.0",
+        "encoding_detected": "ASCII",
+        "total_records": 5432,
+        "tenant_id": "qantas_prod"
+      }
+    },
+    {
+      "@type": "Extension",
+      "@id": "ssim.ch7.record_type_1#ext_carriers",
+      "name": "carriers",
+      "description": "Collection of all Carrier (RT2) records in this SSIM file. Lazily loaded by filtering all RT2 records that follow this RT1. In SSIM structure: RT1 → [RT2 → RT3(s) → RT4(s)]* → RT5. This provides a top-level view of all carriers in the file.",
+      "extensionType": "array",
+      "items": {
+        "$ref": "ssim.ch7.record_type_2"
+      },
+      "loadingStrategy": "lazy",
+      "joinCondition": "All RT2 records between this RT1 and the corresponding RT5",
+      "ordering": "ORDER BY rt2.airline_designator, rt2.record_serial_number",
+      "notes": [
+        "This field is NOT encoded in the 200-byte fixed-width RT1 record",
+        "It is populated by parsing all RT2 records in the file",
+        "Enables hierarchical navigation: RT1 → RT2 → RT3 → RT4",
+        "Empty array if file contains no carrier records",
+        "Useful for 'table of contents' view of SSIM file"
+      ],
+      "exampleValue": [
+        {
+          "airline_designator": "QF ",
+          "time_mode": "L",
+          "period_of_validity_from": "2024-12-07",
+          "period_of_validity_to": "2025-02-02",
+          "flight_legs": []
+        },
+        {
+          "airline_designator": "VA ",
+          "time_mode": "L",
+          "period_of_validity_from": "2024-12-07",
+          "period_of_validity_to": "2025-02-02",
+          "flight_legs": []
+        }
+      ]
+    },
+    {
+      "@type": "Extension",
+      "@id": "ssim.ch7.record_type_1#ext_validation_summary",
+      "name": "validation_summary",
+      "description": "Summary of validation results for the entire SSIM file. Populated after full file parse to provide quality metrics.",
+      "extensionType": "object",
+      "loadingStrategy": "computed",
+      "properties": {
+        "is_valid": {
+          "type": "boolean",
+          "description": "True if all records passed validation"
+        },
+        "total_errors": {
+          "type": "integer",
+          "description": "Total number of validation errors across all records"
+        },
+        "total_warnings": {
+          "type": "integer",
+          "description": "Total number of validation warnings"
+        },
+        "errors_by_record_type": {
+          "type": "object",
+          "description": "Error count breakdown by record type (RT1, RT2, RT3, RT4, RT5)"
+        },
+        "first_error": {
+          "type": "string",
+          "description": "Description of the first validation error encountered"
+        }
+      },
+      "notes": [
+        "Computed after full file parse",
+        "Enables quick quality assessment of SSIM files",
+        "Can be used to reject low-quality files before ingestion",
+        "Supports SLO tracking (e.g., '99% of SSIM files must be valid')"
+      ],
+      "exampleValue": {
+        "is_valid": false,
+        "total_errors": 3,
+        "total_warnings": 12,
+        "errors_by_record_type": {
+          "RT3": 2,
+          "RT4": 1
+        },
+        "first_error": "RT3 record 123: departure_station 'XXX' is not a valid IATA code"
+      }
+    }
+  ],
+  "trainingExamples": [
+    {
+      "@type": "TrainingExample",
+      "name": "Standard Header Record",
+      "input": "1AIRLINE STANDARD SCHEDULE DATA SET                                                                                                                                                            001000001",
+      "output": {
+        "record_type": "1",
+        "title_of_contents": "AIRLINE STANDARD SCHEDULE DATA SET",
+        "spare_1": "     ",
+        "number_of_seasons": " ",
+        "spare_2": "<150 blanks>",
+        "data_set_serial_number": 1,
+        "record_serial_number": 1
+      },
+      "explanation": "Standard SSIM Header record. The title_of_contents contains the exact text 'AIRLINE STANDARD SCHEDULE DATA SET' at bytes 2-35. number_of_seasons is blank (no explicit seasons). data_set_serial_number is 001 (first dataset from this source). record_serial_number is 000001 (always 1 for RT1).",
+      "encoding": "ASCII"
+    },
+    {
+      "@type": "TrainingExample",
+      "name": "Header with Two Seasons",
+      "input": "1AIRLINE STANDARD SCHEDULE DATA SET     2                                                                                                                                                      042000001",
+      "output": {
+        "record_type": "1",
+        "title_of_contents": "AIRLINE STANDARD SCHEDULE DATA SET",
+        "spare_1": "     ",
+        "number_of_seasons": "2",
+        "spare_2": "<150 blanks>",
+        "data_set_serial_number": 42,
+        "record_serial_number": 1
+      },
+      "explanation": "Header record indicating TWO seasons in the dataset (byte 41 = '2'). This might represent Summer 2024 + Winter 2024/25 schedules in the same file. data_set_serial_number is 042, indicating this is the 42nd dataset issued from this source.",
+      "encoding": "ASCII"
+    },
+    {
+      "@type": "TrainingExample",
+      "name": "Header with Single Season",
+      "input": "1AIRLINE STANDARD SCHEDULE DATA SET     1                                                                                                                                                      999000001",
+      "output": {
+        "record_type": "1",
+        "title_of_contents": "AIRLINE STANDARD SCHEDULE DATA SET",
+        "spare_1": "     ",
+        "number_of_seasons": "1",
+        "spare_2": "<150 blanks>",
+        "data_set_serial_number": 999,
+        "record_serial_number": 1
+      },
+      "explanation": "Header record with ONE season declared. data_set_serial_number is 999 (maximum value before wrapping back to 001). This indicates many schedule updates have been issued.",
+      "encoding": "ASCII"
+    }
+  ],
+  "usageExamples": [
+    {
+      "@type": "UsageExample",
+      "language": "elixir",
+      "title": "Parse Header Record",
+      "code": "# Parse a 200-byte SSIM Header record\nraw_record = \"1AIRLINE STANDARD SCHEDULE DATA SET     ...\"\n\ncase AFSpecs.SSIM.HeaderRecord.parse(raw_record) do\n  {:ok, header} ->\n    IO.puts \"Dataset Serial: #{header.data_set_serial_number}\"\n    IO.puts \"Seasons: #{header.number_of_seasons}\"\n    \n    # Validate it's a proper header\n    if header.record_serial_number == 1 do\n      IO.puts \"Valid SSIM file - processing carriers...\"\n    else\n      IO.puts \"ERROR: Header must have record_serial_number = 1\"\n    end\n    \n  {:error, error} ->\n    IO.puts \"Parse failed: #{error.message}\"\nend"
+    },
+    {
+      "@type": "UsageExample",
+      "language": "elixir",
+      "title": "Validate SSIM File Structure",
+      "code": "# Validate entire SSIM file starting with header\ndefmodule SSIMValidator do\n  def validate_file(file_path) do\n    file_path\n    |> File.stream!([], 200)  # Read in 200-byte chunks\n    |> Stream.with_index()\n    |> Stream.map(fn {record, index} ->\n      case index do\n        0 -> \n          # First record MUST be RT1\n          validate_header(record)\n        _ -> \n          # Subsequent records\n          validate_record(record)\n      end\n    end)\n    |> Enum.to_list()\n  end\n  \n  defp validate_header(record) do\n    with {:ok, header} <- AFSpecs.SSIM.HeaderRecord.parse(record),\n         {:ok, _} <- AFSpecs.SSIM.HeaderRecord.validate(header) do\n      {:ok, :header_valid}\n    else\n      {:error, reason} -> {:error, {:invalid_header, reason}}\n    end\n  end\nend"
+    },
+    {
+      "@type": "UsageExample",
+      "language": "elixir",
+      "title": "Extract File Metadata",
+      "code": "# Extract metadata from SSIM header for API response\ndefmodule SSIMMetadata do\n  def extract_metadata(file_path) do\n    first_record = File.read!(file_path) |> String.slice(0, 200)\n    \n    case AFSpecs.SSIM.HeaderRecord.parse(first_record) do\n      {:ok, header} ->\n        %{\n          is_valid_ssim: true,\n          dataset_serial: header.data_set_serial_number,\n          season_count: parse_season_count(header.number_of_seasons),\n          file_signature: header.title_of_contents,\n          processing_metadata: %{\n            source_file: Path.basename(file_path),\n            file_size_bytes: File.stat!(file_path).size,\n            parsed_at: DateTime.utc_now(),\n            parser_version: \"0.1.0\"\n          }\n        }\n      \n      {:error, _} ->\n        %{is_valid_ssim: false, error: \"Invalid SSIM header\"}\n    end\n  end\n  \n  defp parse_season_count(\" \"), do: 0\n  defp parse_season_count(n), do: String.to_integer(n)\nend"
+    }
+  ],
+  "references": [
+    {
+      "@type": "Reference",
+      "title": "IATA SSIM Chapter 7.5.1 - Header Record (Record Type 1)",
+      "version": "March 2011",
+      "url": "https://www.iata.org/en/publications/ssim/",
+      "description": "Official IATA Standard Schedules Information Manual specification for Header Record format"
+    },
+    {
+      "@type": "Reference",
+      "title": "IATA SSIM Chapter 7 - Record Formats",
+      "version": "March 2011",
+      "url": "https://www.iata.org/en/publications/ssim/",
+      "description": "Overall SSIM record format conventions and structure"
+    },
+    {
+      "@type": "Reference",
+      "title": "IATA SSIM Chapter 2 - Record Serial Number Overflow Handling",
+      "version": "March 2011",
+      "url": "https://www.iata.org/en/publications/ssim/",
+      "description": "Rules for handling record serial numbers when files exceed 999,999 records"
+    }
+  ],
+  "implementationNotes": [
+    "Validate fixed-length fields; pad/truncate to required byte offsets",
+    "Enforce 200-byte fixed-length for RT1-RT5; pad with ASCII space (0x20)",
+    "Right-pad text fields, left-pad numeric fields; validate field ranges and allowed sets",
+    "Record ordering: RT1 Header → [RT2 Carrier → RT3 Flight Leg(s) → RT4 Segment(s)]* → RT5 Trailer",
+    "If record serial number exceeds 999999, follow SSIM Chapter 2 rule - do not silently wrap; raise and apply documented overflow handling",
+    "Always validate that RT1 is the first record and has record_serial_number = 000001",
+    "The title_of_contents field is critical for file validation - reject files that don't match exactly",
+    "Spare fields (spare_1, spare_2) should be blank-filled; parsers may ignore content but validators should check"
+  ],
+  "status": "stable",
+  "dateCreated": "2025-10-18",
+  "dateModified": "2025-10-18",
+  "contributors": [
+    "Active Flights Specification Team",
+    "IATA SSIM Working Group"
+  ],
+  "license": "https://activeflights.com/licenses/specs-v1",
+  "seeAlso": [
+    "ssim.ch7.record_type_2",
+    "ssim.ch7.record_type_3",
+    "ssim.ch7.record_type_4",
+    "ssim.ch7.record_type_5"
+  ],
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2025-11-24",
+      "changes": [
+        "Initial release of Header Record (RT1) specification",
+        "Standardized @type to RecordSpecification",
+        "Converted field positions from 1-based to 0-based indexing",
+        "Added sharedVocabulary reference to shared.vocabulary.jsonld",
+        "Added indexing note in conventions section",
+        "Added 1000-byte block structure documentation (1 data record + 4 zero-padding records)"
+      ]
+    }
+  ]
+}

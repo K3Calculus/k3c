@@ -557,3 +557,220 @@ class TestParallelReduce:
         assert result.states[0]["serial"] == 4
         assert result.states[1]["serial"] == 104
         assert result.states[2]["serial"] == 204
+
+    def test_chunk_source_callables(self):
+        """parallel_reduce accepts ChunkSource instances for streaming."""
+        from k3c.universe.universe import ChunkSource
+
+        spec = _counter_spec()
+
+        def make_source(n, count):
+            def produce():
+                for _ in range(count):
+                    yield {"type": "Inc", "n": n}
+
+            return ChunkSource(produce=produce)
+
+        sources = [make_source(1, 5), make_source(2, 5), make_source(3, 5)]
+        specs = [
+            spec.slice(from_state={"count": 0}),
+            spec.slice(from_state={"count": 100}),
+            spec.slice(from_state={"count": 200}),
+        ]
+        result = parallel_reduce(_CounterSystem(), specs, sources, workers=1)
+        assert result.passed
+        assert result.total_processed == 15
+        assert result.states[0]["count"] == 5
+        assert result.states[1]["count"] == 110
+        assert result.states[2]["count"] == 215
+
+    def test_mixed_lists_and_sources(self):
+        """parallel_reduce accepts a mix of lists and ChunkSource instances."""
+        from k3c.universe.universe import ChunkSource
+
+        spec = _counter_spec()
+
+        def produce():
+            yield {"type": "Inc", "n": 10}
+            yield {"type": "Inc", "n": 20}
+
+        chunks: list = [
+            [{"type": "Inc", "n": 1}, {"type": "Inc", "n": 2}],
+            ChunkSource(produce=produce),
+        ]
+        specs = [
+            spec.slice(from_state={"count": 0}),
+            spec.slice(from_state={"count": 0}),
+        ]
+        result = parallel_reduce(_CounterSystem(), specs, chunks, workers=1)
+        assert result.passed
+        assert result.states[0]["count"] == 3
+        assert result.states[1]["count"] == 30
+
+
+class TestStreamingIterable:
+    """Tests that reduce, reduce_all, and stream accept generators."""
+
+    def test_reduce_with_generator(self):
+        u = _bank()
+
+        def events():
+            yield {"type": "Deposit", "amount": 50}
+            yield {"type": "Withdraw", "amount": 20}
+
+        result = u.reduce(events())
+        assert isinstance(result, Ok)
+        assert u.state["balance"] == 130
+
+    def test_reduce_all_with_generator(self):
+        u = _bank()
+
+        def events():
+            yield {"type": "Withdraw", "amount": 200}  # impossible
+            yield {"type": "Deposit", "amount": 50}  # ok
+            yield {"type": "Withdraw", "amount": 10}  # ok
+
+        ra = u.reduce_all(events())
+        assert ra.passed
+        assert ra.processed == 2
+        assert len(ra.skipped) == 1
+
+    def test_reduce_with_map_iterator(self):
+        u = _bank()
+        amounts = [50, 30, 20]
+        events = ({"type": "Deposit", "amount": a} for a in amounts)
+        result = u.reduce(events)
+        assert isinstance(result, Ok)
+        assert u.state["balance"] == 200
+
+    def test_reduce_all_constant_memory(self):
+        """Verify reduce_all works with a large generator without OOM."""
+        spec = (
+            Spec("counter")
+            .state0({"count": 0})
+            .permit("ok", when=LBool(True))
+            .build()
+        )
+
+        class Inc:
+            def transition(self, s, e):
+                return {**s, "count": s["count"] + 1}
+
+        u = universe(Inc(), spec)
+
+        def many_events(n):
+            for _ in range(n):
+                yield {"type": "Inc"}
+
+        ra = u.reduce_all(many_events(10_000))
+        assert ra.passed
+        assert ra.processed == 10_000
+        assert u.state["count"] == 10_000
+
+    def test_stream_yields_all_results(self):
+        u = _bank()
+        events = [
+            {"type": "Deposit", "amount": 50},
+            {"type": "Withdraw", "amount": 200},  # impossible
+            {"type": "Withdraw", "amount": 10},
+        ]
+        results = list(u.stream(iter(events)))
+        assert len(results) == 3
+        assert isinstance(results[0], Ok)
+        assert isinstance(results[1], Impossible)
+        assert isinstance(results[2], Ok)
+        assert u.state["balance"] == 140
+
+    def test_stream_stops_on_violated(self):
+        spec = (
+            Spec("v")
+            .state0({"x": 10})
+            .permit("ok", when=LBool(True))
+            .maintain(
+                "positive",
+                expr=Always(Compare(CmpOp.GT, Field(Var("state"), "x"), LInt(0))),
+            )
+            .build()
+        )
+
+        class Dec:
+            def transition(self, s, e):
+                return {"x": s["x"] - e.get("d", 1)}
+
+        u = universe(Dec(), spec)
+        events = [
+            {"type": "A", "d": 3},  # result state 7, passes
+            {"type": "A", "d": 3},  # result state 4, passes
+            {"type": "A", "d": 5},  # result state negative, violated
+            {"type": "A", "d": 1},  # never reached
+        ]
+        results = list(u.stream(iter(events)))
+        assert len(results) == 3
+        assert isinstance(results[0], Ok)
+        assert isinstance(results[1], Ok)
+        assert isinstance(results[2], Violated)
+
+    def test_stream_with_generator(self):
+        u = _bank()
+
+        def events():
+            yield {"type": "Deposit", "amount": 100}
+            yield {"type": "Withdraw", "amount": 50}
+
+        results = list(u.stream(events()))
+        assert len(results) == 2
+        assert all(isinstance(r, Ok) for r in results)
+        assert u.state["balance"] == 150
+
+    def test_stream_projections_per_event(self):
+        """stream() exposes projections on each intermediate Ok."""
+        spec = (
+            Spec("counter")
+            .state0({"count": 0})
+            .permit("ok", when=LBool(True))
+            .project("current", lambda s: s["count"])
+            .build()
+        )
+
+        class Inc:
+            def transition(self, s, e):
+                return {**s, "count": s["count"] + e.get("n", 1)}
+
+        u = universe(Inc(), spec)
+        events = [{"type": "Inc", "n": 10}, {"type": "Inc", "n": 20}]
+        projections = [
+            r.projections["current"] for r in u.stream(iter(events)) if isinstance(r, Ok)
+        ]
+        assert projections == [10, 30]
+
+    def test_stream_outputs_per_event(self):
+        """stream() exposes outputs on each intermediate Ok."""
+        spec = (
+            Spec("bank")
+            .state0({"balance": 100})
+            .permit("ok", when=LBool(True))
+            .output(
+                "receipt",
+                lambda s, e, ns: {"type": "Receipt", "amount": e.get("amount")},
+                on="Deposit",
+            )
+            .build()
+        )
+
+        class Bank:
+            def transition(self, s, e):
+                return {**s, "balance": s["balance"] + e.get("amount", 0)}
+
+        u = universe(Bank(), spec)
+        events = [
+            {"type": "Deposit", "amount": 50},
+            {"type": "Other"},
+            {"type": "Deposit", "amount": 30},
+        ]
+        all_outputs = []
+        for r in u.stream(iter(events)):
+            if isinstance(r, Ok):
+                all_outputs.extend(r.outputs)
+        assert len(all_outputs) == 2
+        assert all_outputs[0]["amount"] == 50
+        assert all_outputs[1]["amount"] == 30

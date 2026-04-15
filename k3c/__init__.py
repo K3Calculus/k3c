@@ -65,6 +65,7 @@ from k3c.lang.ir import (
 
 # ── Universe ────────────────────────────────────────────────────────────────
 from k3c.universe.universe import (
+    ChunkSource,
     ParallelReduceResult,
     ReduceAllResult,
     System,
@@ -147,6 +148,7 @@ __all__ = [
     "parallel_reduce",
     "ParallelReduceResult",
     "ReduceAllResult",
+    "ChunkSource",
     # Algebra
     "ComposedUniverse",
     "BridgedUniverse",

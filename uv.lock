@@ -287,6 +287,9 @@ wheels = [
 name = "k3c"
 version = "0.1.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "blake3" },
+]
 
 [package.optional-dependencies]
 blake3 = [
@@ -307,6 +310,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "blake3", specifier = ">=1.0.8" },
     { name = "blake3", marker = "extra == 'blake3'" },
     { name = "orjson", marker = "extra == 'orjson'" },
 ]

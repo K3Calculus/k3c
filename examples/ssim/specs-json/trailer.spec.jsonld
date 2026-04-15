@@ -1,0 +1,727 @@
+{
+  "@context": {
+    "@vocab": "https://activeflights.com/specs/v1/ssim#",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "iata": "https://www.iata.org/",
+    "ssim": "https://activeflights.com/specs/v1/ssim#",
+    "field": "https://activeflights.com/specs/v1/field#"
+  },
+  "@type": "RecordSpecification",
+  "sharedVocabulary": {
+    "@ref": "./shared.vocabulary.jsonld",
+    "description": "References common field definitions, types, and patterns"
+  },
+  "@id": "ssim.ch7.record_type_5",
+  "specId": "ssim.ch7.record_type_5",
+  "version": "1.0.0",
+  "name": "Trailer Record (Record Type 5)",
+  "recordType": 5,
+  "chapter": "7.5.5",
+  "length": 200,
+  "iataVersion": "2025.35",
+  "status": "active",
+  "aiNotes": "Trailer Record (RT5) marks the end of a carrier's schedule data block. It closes the data set that began with a Carrier Record (RT2) and contained Flight Leg (RT3) and Segment Data (RT4) records.\n\nKEY CONCEPTS:\n\n1. **File Structure**: Every SSIM file follows this pattern:\n   - RT1 (Header) - File start, appears once\n   - [RT2 (Carrier) - Carrier schedule start\n     - RT3 (Flight Leg) - Individual flights\n       - RT4 (Segment Data) - Additional flight data (optional)\n     - RT5 (Trailer) - Carrier schedule end]* ← Can repeat for multiple carriers\n\n2. **Serial Number Check**: RT5 contains TWO serial number fields:\n   - serial_number_check_reference (bytes 188-193): Must equal previous record's serial number\n   - record_serial_number (bytes 195-200): Must equal check_reference + 1\n   - This provides integrity validation: If check_reference ≠ (serial_number - 1), file is corrupted\n\n3. **Continuation/End Code** (byte 194):\n   - 'C' (Continue): More carrier blocks follow (another RT2 coming)\n   - 'E' (End): This is the last carrier block in the file (end of data)\n\n4. **Block Padding**: SSIM files use 1000-byte blocks:\n   - Each record is 200 bytes\n   - After RT5, pad remaining bytes with zeros (0x00 / 0x30) to reach block boundary\n   - Example: If RT5 ends at byte 198,000, pad bytes 198,200-199,000 with zeros\n\n5. **Trailer Scope**: RT5 closes ONE carrier's schedule data:\n   - If file contains 5 carriers → 5 RT2/RT5 pairs\n   - Each RT2 opens a carrier block, corresponding RT5 closes it\n   - airline_designator in RT5 should match the RT2 it's closing\n\nEXAMPLE STRUCTURE:\n```\nRecord #1: RT1 (Header)\nRecord #2: RT2 (Carrier: QF - Qantas)\nRecord #3: RT3 (QF Flight 1)\nRecord #4: RT4 (QF Flight 1 - DEI 106)\n...\nRecord #500: RT5 (Trailer for QF) ← continuation_end_code='C'\nRecord #501: RT2 (Carrier: VA - Virgin Australia)\nRecord #502: RT3 (VA Flight 1)\n...\nRecord #1000: RT5 (Trailer for VA) ← continuation_end_code='E' (last carrier)\n```\n\nINTEGRITY CHECKING:\n- RT1 must be record_serial_number = 000001\n- Each subsequent record increments by 1\n- RT5 serial_number_check_reference = previous record's serial number\n- RT5 record_serial_number = serial_number_check_reference + 1\n- If any mismatch: File corruption or missing records\n\nCOMMON SCENARIOS:\n\nScenario 1: Single carrier file\n- RT1 (000001)\n- RT2 (000002) - Carrier XX\n- RT3/RT4... (000003-000989)\n- RT5 (000990) - continuation_end_code='E' ✓\n\nScenario 2: Multi-carrier file\n- RT1 (000001)\n- RT2 (000002) - Carrier QF\n- RT3/RT4... (000003-000500)\n- RT5 (000501) - continuation_end_code='C' ← More carriers coming\n- RT2 (000502) - Carrier VA\n- RT3/RT4... (000503-000989)\n- RT5 (000990) - continuation_end_code='E' ← Last carrier\n\nCRITICAL VALIDATIONS:\n1. serial_number_check_reference must equal (record_serial_number - 1)\n2. Record sequence must be continuous (no gaps)\n3. continuation_end_code must be 'C' or 'E'\n4. If continuation_end_code='C', expect RT2 next\n5. If continuation_end_code='E', expect end-of-file or padding\n\nCOMMON PITFALLS:\n- Forgetting to increment serial_number_check_reference\n- Using 'C' on last carrier (should be 'E')\n- Using 'E' when more carriers exist (truncates file)\n- Not padding 1000-byte blocks after RT5\n- serial_number_check_reference ≠ (record_serial_number - 1)\n\nPARSING WORKFLOW:\n1. Read RT5 record (200 bytes)\n2. Validate record_type = '5'\n3. Extract serial numbers (bytes 188-193, 195-200)\n4. Verify: serial_number_check_reference = (record_serial_number - 1)\n5. Extract continuation_end_code (byte 194)\n6. If 'C': Expect more data (RT2 next)\n7. If 'E': File complete, validate integrity\n8. Update file integrity metrics\n9. Pad to 1000-byte block boundary with zeros",
+  "description": "The Trailer Record marks the end of data under the preceding Carrier Record (RT2). Further Carrier/Trailer record combinations may follow in the data set. Each Trailer Record is 200 bytes with fields defined below. RT5 is a 1000-byte logical block (1 data record + 4 zero-padding records) per SSIM Chapter 7 block alignment requirements.",
+  "encoding": {
+    "allowed": [
+      "ASCII",
+      "EBCDIC"
+    ],
+    "ascii": {
+      "blank_hex": "0x20",
+      "zero_hex": "0x30"
+    },
+    "ebcdic": {
+      "blank_hex": "0x40",
+      "zero_hex": "0xF0"
+    }
+  },
+  "statusLegend": {
+    "M": "Mandatory",
+    "C": "Conditional",
+    "O": "Optional"
+  },
+  "conventions": {
+    "positions": "Byte positions are zero-indexed (0-199 for 200-byte records). This aligns with programming language array indexing. Note: IATA SSIM documentation uses 1-based indexing (1-200).",
+    "padding": "Unless noted, blanks are used to pad unused bytes.",
+    "fill_rules": {
+      "blank": "Fill with space characters.",
+      "zero": "Fill with numeric zeroes."
+    },
+    "alignment": {
+      "left": "Left-justify content; pad on the right.",
+      "right": "Right-justify content; pad on the left."
+    }
+  },
+  "fields": [
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_5#record_type",
+      "name": "record_type",
+      "fieldType": "string",
+      "position": {
+        "start": 0,
+        "end": 0,
+        "length": 1
+      },
+      "status": "M",
+      "const": "5",
+      "description": "Record Type identifier. Always '5' for Trailer Record.",
+      "aiNotes": "Fixed constant '5' identifying this as a Trailer Record.\n\nValidation: Must always be exactly '5' (ASCII 0x35).\n\nThis is the last record type in the SSIM specification (RT1-RT5). The Trailer marks the end of a carrier's schedule block.",
+      "examples": [
+        "5"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_5#spare_1",
+      "name": "spare_1",
+      "fieldType": "string",
+      "position": {
+        "start": 1,
+        "end": 1,
+        "length": 1
+      },
+      "status": "M",
+      "fill": "blank",
+      "description": "Reserved for future use. 1 byte, blank-filled.",
+      "aiNotes": "Reserved field, currently unused.\n\nCurrent usage:\n- Must be blank-filled (1 ASCII space: 0x20)\n- No data should be stored here\n\nValidation:\n- Must be exactly 1 byte\n- Must be blank (ASCII 0x20 or EBCDIC 0x40)\n\nParsing: Can skip/ignore when reading, must write blank when creating RT5.",
+      "examples": [
+        " "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_5#airline_designator",
+      "name": "airline_designator",
+      "fieldType": "string",
+      "position": {
+        "start": 2,
+        "end": 4,
+        "length": 3
+      },
+      "status": "M",
+      "align": "left",
+      "pad": "blank",
+      "pattern": "^[A-Z0-9]{2}[A-Z0-9 ]$",
+      "description": "IATA airline designator. 2-3 alphanumeric characters, left-justified with blank padding. Should match the RT2 Carrier Record this trailer is closing.",
+      "aiNotes": "IATA airline code identifying which carrier's schedule block is ending.\n\nFormat:\n- 2-character codes: Right-padded with blank (e.g., 'QF ' for Qantas)\n- 3-character codes: No padding (e.g., 'QFA' if used as 3-char)\n- Always left-justified, blank-padded to 3 bytes\n\nExamples:\n- 'QF ' = Qantas Airways\n- 'AA ' = American Airlines\n- 'BA ' = British Airways\n- 'VA ' = Virgin Australia\n- 'XX ' = Example carrier\n\nValidation:\n- First 2 chars: Must be alphanumeric [A-Z0-9]\n- Third char: Alphanumeric or blank\n- Should match corresponding RT2 record's airline_designator\n\nScenario:\nRT2 (record 002): airline_designator='QF '\n- RT3 records (003-500): QF flights\n- RT5 (record 501): airline_designator='QF ' ✓ Match!\n\nIf RT5 airline_designator ≠ RT2 airline_designator:\n- Warning: Trailer closing different carrier than expected\n- Possible file corruption or structure error\n\nBest practice:\n- Validate RT5 airline matches most recent RT2\n- Track RT2→RT5 pairing during parsing\n- Alert if mismatch detected",
+      "examples": [
+        "QF ",
+        "AA ",
+        "BA ",
+        "VA ",
+        "XX "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_5#release_sell_date",
+      "name": "release_sell_date",
+      "fieldType": "date",
+      "position": {
+        "start": 5,
+        "end": 11,
+        "length": 7
+      },
+      "status": "O",
+      "dateFormat": "DDMMMYY",
+      "pattern": "^[0-3][0-9](JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[0-9]{2}$|^[ ]{7}$",
+      "description": "Release (Sell) Date. Same format as RT2 bytes 65-71. Optional - blank if not used. Indicates when this schedule was released for sale.",
+      "aiNotes": "Optional sell/release date for the schedule data.\n\nFormat: DDMMMYY (same as RT2)\n- DD: Day (01-31, zero-padded)\n- MMM: Month (JAN, FEB, MAR, APR, MAY, JUN, JUL, AUG, SEP, OCT, NOV, DEC)\n- YY: Year (2-digit, e.g., 21 = 2021, 24 = 2024)\n\nExamples:\n- '03DEC21' = December 3, 2021\n- '15JAN24' = January 15, 2024\n- '01JUL25' = July 1, 2025\n- '       ' = Blank (not used)\n\nPurpose:\nIndicates when this carrier's schedule was released for booking/sale.\n\nOptional field:\n- If present: Contains valid DDMMMYY date\n- If not used: 7 blank spaces\n\nParsing:\n- If blank: release_sell_date = nil/null\n- If present: Parse as date (convert to Date object)\n\nValidation:\n- If present, must match DDMMMYY pattern\n- Day must be valid for month (01-31)\n- Month must be valid 3-letter abbreviation\n- Year can be any 2-digit number\n\nRelationship to RT2:\n- RT2 has creation_date field (bytes 65-71)\n- RT5 release_sell_date may mirror RT2's date\n- Or may be different (released later than created)\n\nYear interpretation (Y2K/Y3K handling):\n- 00-49: 2000-2049\n- 50-99: 1950-1999\n- Example: '21' = 2021, '99' = 1999, '05' = 2005\n\nCommon values:\n- Blank (' ' × 7): Most common (optional field often unused)\n- Specific date: When schedule release tracking is important",
+      "examples": [
+        "03DEC21",
+        "15JAN24",
+        "01JUL25",
+        "       "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_5#spare_2",
+      "name": "spare_2",
+      "fieldType": "string",
+      "position": {
+        "start": 12,
+        "end": 186,
+        "length": 175
+      },
+      "status": "M",
+      "fill": "blank",
+      "description": "Reserved for future use. 175 bytes, blank-filled. Largest reserved field in RT5.",
+      "aiNotes": "Large reserved field for future SSIM extensions.\n\nCurrent usage:\n- Must be blank-filled (175 ASCII spaces: 0x20)\n- No data should be stored here\n\nValidation:\n- Must be exactly 175 bytes\n- All bytes must be blank (ASCII 0x20 or EBCDIC 0x40)\n\nFuture proofing:\n- Do not use for custom data (will break forward compatibility)\n- IATA may assign meaning in future SSIM versions\n\nSize context:\n- This is the LARGEST reserved field in RT5\n- 175 bytes out of 200 total (87.5% of record is reserved)\n- Shows minimal data requirements for trailer record\n\nParsing:\n- Can skip/ignore when reading\n- Must write blanks when creating RT5 records\n\nImplementation note:\n- When writing RT5: Use String.duplicate(\" \", 175) or similar\n- When reading RT5: No need to validate content (just skip)",
+      "examples": [
+        "                                                                                                                                                               "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_5#serial_number_check_reference",
+      "name": "serial_number_check_reference",
+      "fieldType": "integer",
+      "position": {
+        "start": 187,
+        "end": 192,
+        "length": 6
+      },
+      "status": "M",
+      "width": 6,
+      "align": "right",
+      "pad": "zero",
+      "format": {
+        "zero_pad": 6,
+        "radix": 10
+      },
+      "range": [
+        1,
+        999999
+      ],
+      "description": "Serial Number Check Reference. 6-digit zero-padded number (000001-999999). Must equal the Record Serial Number of the previous record (irrespective of record type) and be one less than this Trailer's Record Serial Number (bytes 195-200).",
+      "aiNotes": "CRITICAL INTEGRITY FIELD - enables file corruption detection.\n\nFormat:\n- 6-digit zero-padded integer\n- Range: 000001 to 999999\n- Right-justified, zero-padded\n- Examples: '000001', '000989', '123456'\n\nPurpose:\nProvides checksum-like validation for record sequence integrity.\n\nValidation rule:\nserial_number_check_reference MUST equal (record_serial_number - 1)\n\nExample:\n- Previous record (RT4): record_serial_number = 000989\n- This record (RT5): serial_number_check_reference = 000989 ✓\n- This record (RT5): record_serial_number = 000990 ✓\n- Validation: 000989 = (000990 - 1) ✓ Valid!\n\nError detection:\nIf serial_number_check_reference ≠ (record_serial_number - 1):\n- CRITICAL ERROR: File corruption or missing records\n- Either record_serial_number is wrong, OR\n- Previous record's serial number was wrong, OR\n- Records are missing from the file\n\nScenarios:\n\nScenario 1: Valid sequence\n- RT4 (000988): record_serial_number = 000988\n- RT5 (000989): serial_number_check_reference = 000988, record_serial_number = 000989\n- Validation: 000988 = (000989 - 1) ✓\n\nScenario 2: Missing record\n- RT4 (000988): record_serial_number = 000988\n- [RT4 (000989) MISSING!]\n- RT5 (000990): serial_number_check_reference = 000989, record_serial_number = 000990\n- Previous actual record was 000988, but check_reference says 000989 ✗\n- ERROR: Record 000989 is missing!\n\nScenario 3: Corrupted serial number\n- RT4 (000988): record_serial_number = 000988\n- RT5 (000990): serial_number_check_reference = 000990, record_serial_number = 000991\n- Validation: 000990 = (000991 - 1) ✓ Internal consistency OK\n- BUT: Previous record was 000988, not 000990 ✗\n- ERROR: Gap detected (000989 missing OR serial numbers corrupted)\n\nImplementation:\n```elixir\ndef validate_rt5(trailer, previous_record) do\n  expected_check = previous_record.record_serial_number\n  actual_check = trailer.serial_number_check_reference\n  \n  if expected_check != actual_check do\n    {:error, \"RT5 check reference mismatch: expected #{expected_check}, got #{actual_check}\"}\n  else\n    # Also validate internal consistency\n    if trailer.serial_number_check_reference != (trailer.record_serial_number - 1) do\n      {:error, \"RT5 internal inconsistency: check #{trailer.serial_number_check_reference} != serial #{trailer.record_serial_number} - 1\"}\n    else\n      :ok\n    end\n  end\nend\n```\n\nOverflow handling:\nIf record_serial_number wraps from 999999 to 000002:\n- serial_number_check_reference = 999999\n- record_serial_number = 000002\n- Validation uses modulo: (999999 + 1) mod 1000000 = 0 → skip to 2\n\nCritical validation:\n- Check reference must match previous record's serial\n- Check reference must equal (this serial - 1)\n- Both conditions must be true for valid file",
+      "examples": [
+        "000001",
+        "000989",
+        "123456",
+        "999999"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_5#continuation_end_code",
+      "name": "continuation_end_code",
+      "fieldType": "string",
+      "position": {
+        "start": 193,
+        "end": 193,
+        "length": 1
+      },
+      "status": "M",
+      "enum": [
+        "C",
+        "E"
+      ],
+      "description": "Continuation/End Code. Single character: 'C' (Continue - more carrier blocks follow) or 'E' (End - this is the last carrier block in the file).",
+      "aiNotes": "CRITICAL FIELD - determines if more data follows or file is complete.\n\nAllowed values:\n- 'C' = Continue (more carrier blocks follow)\n- 'E' = End (this is the last carrier block, end of file)\n\nPurpose:\nIndicates whether additional carrier schedule blocks exist after this trailer.\n\nScenario 1: Single carrier file\n- RT1 (Header)\n- RT2 (Carrier: XX)\n- RT3/RT4... (XX flights)\n- RT5 (Trailer: XX, continuation_end_code='E') ← Last carrier, end of file\n\nScenario 2: Multi-carrier file\n- RT1 (Header)\n- RT2 (Carrier: QF - Qantas)\n- RT3/RT4... (QF flights)\n- RT5 (Trailer: QF, continuation_end_code='C') ← More carriers coming!\n- RT2 (Carrier: VA - Virgin Australia)\n- RT3/RT4... (VA flights)\n- RT5 (Trailer: VA, continuation_end_code='C') ← More carriers coming!\n- RT2 (Carrier: JQ - Jetstar)\n- RT3/RT4... (JQ flights)\n- RT5 (Trailer: JQ, continuation_end_code='E') ← Last carrier, end of file\n\nValidation logic:\n\nIf continuation_end_code = 'C':\n- Expect next record to be RT2 (Carrier Record)\n- If next record is NOT RT2: ERROR (file structure violation)\n- Continue parsing carrier blocks\n\nIf continuation_end_code = 'E':\n- Expect end of file (or block padding)\n- If more records found: WARNING (unexpected data after 'E')\n- Complete file integrity checks\n- Finalize parsing\n\nCommon errors:\n\n1. Using 'E' when more carriers exist:\n   - File truncated prematurely\n   - Following carrier data ignored/lost\n   - Parser stops too early\n\n2. Using 'C' on last carrier:\n   - Parser expects RT2 next, finds EOF\n   - File appears incomplete\n   - Triggers \"unexpected end of file\" error\n\n3. Using invalid value (not 'C' or 'E'):\n   - Must be exactly 'C' or 'E' (uppercase)\n   - Any other value is invalid\n   - Common mistake: lowercase 'c' or 'e'\n\nParsing workflow:\n```elixir\ndef parse_after_rt5(trailer) do\n  case trailer.continuation_end_code do\n    \"C\" ->\n      # Expect RT2 next\n      case read_next_record() do\n        %{record_type: \"2\"} -> :continue_parsing\n        %{record_type: other} -> {:error, \"Expected RT2 after continuation, got RT#{other}\"}\n        :eof -> {:error, \"Unexpected EOF after continuation code 'C'\"}\n      end\n    \n    \"E\" ->\n      # Expect end of file or padding\n      case read_next_record() do\n        :eof -> :ok  # Expected\n        padding when is_padding?(padding) -> :ok  # Block padding is fine\n        other -> {:warn, \"Unexpected data after end code 'E': #{inspect(other)}\"}\n      end\n    \n    invalid ->\n      {:error, \"Invalid continuation_end_code: '#{invalid}' (must be 'C' or 'E')\"}\n  end\nend\n```\n\nBlock padding after 'E':\n- After RT5 with 'E', remaining bytes in 1000-byte block are zeros\n- Example: RT5 at byte 198,000, pad bytes 198,200-199,000 with zeros\n- This is NOT additional data, just block alignment\n\nBest practices:\n- Always validate 'C' or 'E' (reject other values)\n- Track expected next record based on code\n- Log warning if 'E' but more data found\n- Error if 'C' but no RT2 follows\n- Count carrier blocks to verify file completeness",
+      "examples": [
+        "C",
+        "E"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_5#record_serial_number",
+      "name": "record_serial_number",
+      "fieldType": "integer",
+      "position": {
+        "start": 194,
+        "end": 199,
+        "length": 6
+      },
+      "status": "M",
+      "width": 6,
+      "align": "right",
+      "pad": "zero",
+      "format": {
+        "zero_pad": 6,
+        "radix": 10
+      },
+      "range": [
+        1,
+        999999
+      ],
+      "description": "Sequential record number. 6-digit zero-padded number (000001-999999). Increments sequentially from RT1 through all records in the dataset. Must equal serial_number_check_reference + 1.",
+      "aiNotes": "Sequential record counter for the entire SSIM file.\n\nFormat:\n- 6-digit zero-padded integer\n- Range: 000001 to 999999\n- Right-justified, zero-padded\n- Examples: '000001', '000990', '123456', '999999'\n\nPurpose:\n- Provides sequential numbering for all records in file\n- Enables record ordering and integrity checks\n- Allows detecting missing/duplicate records\n\nNumbering scheme:\n- RT1 (Header): Always '000001'\n- RT2 (Carrier): '000002' (first carrier record)\n- RT3 (Flight Leg): Increments from RT2\n- RT4 (Segment Data): Increments from RT3\n- RT5 (Trailer): Increments from previous record\n\nExample sequence:\n- 000001: RT1 (Header)\n- 000002: RT2 (Carrier XX)\n- 000003: RT3 (Flight XX450)\n- 000004: RT4 (DEI 106 for XX450)\n- ...\n- 000989: RT4 (Last segment data)\n- 000990: RT5 (Trailer) ← This record\n\nValidation:\nMust satisfy TWO conditions:\n\n1. Sequential from previous record:\n   record_serial_number = previous_record.record_serial_number + 1\n\n2. Internal consistency with check_reference:\n   record_serial_number = serial_number_check_reference + 1\n\nExample validation:\n- Previous record: 000989\n- serial_number_check_reference: 000989\n- record_serial_number: 000990\n- Check 1: 000990 = 000989 + 1 ✓\n- Check 2: 000990 = 000989 + 1 ✓\n- Valid!\n\nOverflow handling:\nIf record count exceeds 999999:\n- Numbering restarts at 000002 (000001 reserved for RT1)\n- Per SSIM Chapter 2 overflow rules\n- Should log warning (files this large are extremely rare)\n\nExample with overflow:\n- 999998: RT4 (Segment Data)\n- 999999: RT4 (Segment Data)\n- 000002: RT5 (Trailer) ← Wrapped! Skip 000001\n- serial_number_check_reference: 999999\n- record_serial_number: 000002\n- Validation uses modulo arithmetic\n\nIntegrity checking:\n- Compare to expected sequence (previous + 1)\n- Detect missing records (gaps in sequence)\n- Detect duplicate records (same serial number twice)\n- Validate against RT5 serial_number_check_reference\n\nCommon usage:\n- File completeness: If RT5 serial = 5432, file should have 5432 records\n- Progress tracking: During parse, show \"Processing record 1234 of 5432\"\n- Error reporting: \"Error at record 3456: invalid field format\"\n\nParsing logic:\n```elixir\ndefmodule SSIMParser do\n  def parse_file(file_path) do\n    file_path\n    |> read_records()\n    |> Enum.reduce({:ok, []}, fn record, {:ok, acc} ->\n      expected_serial = length(acc) + 1\n      actual_serial = record.record_serial_number\n      \n      if actual_serial != expected_serial do\n        {:error, \"Serial mismatch at record #{expected_serial}: got #{actual_serial}\"}\n      else\n        {:ok, [record | acc]}\n      end\n    end)\n    |> case do\n      {:ok, records} -> \n        # Validate RT5\n        trailer = List.first(records)\n        if trailer.record_type == \"5\" do\n          total_records = trailer.record_serial_number\n          actual_count = length(records)\n          if total_records == actual_count do\n            {:ok, Enum.reverse(records)}\n          else\n            {:error, \"Count mismatch: RT5 says #{total_records}, found #{actual_count}\"}\n          end\n        else\n          {:error, \"Last record is not RT5\"}\n        end\n      error -> error\n    end\n  end\nend\n```",
+      "examples": [
+        "000001",
+        "000990",
+        "005432",
+        "123456",
+        "999999"
+      ]
+    }
+  ],
+  "validation": {
+    "length": {
+      "equals": 200,
+      "description": "All RT5 records must be exactly 200 bytes"
+    },
+    "required_constants": [
+      {
+        "field": "record_type",
+        "value": "5",
+        "description": "Record type must always be '5'"
+      }
+    ],
+    "field_lengths": [
+      {
+        "field": "airline_designator",
+        "equals": 3
+      },
+      {
+        "field": "release_sell_date",
+        "equals": 7
+      },
+      {
+        "field": "spare_2",
+        "equals": 175
+      },
+      {
+        "field": "serial_number_check_reference",
+        "equals": 6
+      },
+      {
+        "field": "record_serial_number",
+        "equals": 6
+      }
+    ],
+    "padding_rules": [
+      {
+        "field": "spare_1",
+        "fill": "blank",
+        "description": "spare_1 must be blank-filled (1 blank)"
+      },
+      {
+        "field": "spare_2",
+        "fill": "blank",
+        "description": "spare_2 must be blank-filled (175 blanks)"
+      }
+    ],
+    "pattern_validations": [
+      {
+        "field": "airline_designator",
+        "pattern": "^[A-Z0-9]{2}[A-Z0-9 ]$",
+        "description": "2-3 alphanumeric characters, left-justified, blank-padded"
+      },
+      {
+        "field": "release_sell_date",
+        "pattern": "^[0-3][0-9](JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[0-9]{2}$|^[ ]{7}$",
+        "description": "DDMMMYY format or 7 blanks (optional)"
+      },
+      {
+        "field": "continuation_end_code",
+        "pattern": "^[CE]$",
+        "description": "Must be exactly 'C' or 'E'"
+      }
+    ],
+    "range_validations": [
+      {
+        "field": "serial_number_check_reference",
+        "min": 1,
+        "max": 999999,
+        "description": "Must be between 000001 and 999999"
+      },
+      {
+        "field": "record_serial_number",
+        "min": 1,
+        "max": 999999,
+        "description": "Must be between 000001 and 999999"
+      }
+    ],
+    "enum_validations": [
+      {
+        "field": "continuation_end_code",
+        "allowed": [
+          "C",
+          "E"
+        ],
+        "description": "Must be 'C' (Continue) or 'E' (End)"
+      }
+    ]
+  },
+  "semantic_rules": [
+    {
+      "@id": "ssim.ch7.record_type_5#sr.trailer_check_reference",
+      "id": "sr.trailer_check_reference",
+      "description": "serial_number_check_reference must equal (record_serial_number - 1). This provides internal consistency validation for the trailer record.",
+      "check": "external",
+      "severity": "error",
+      "validation_logic": "For each RT5 record:\n1. Extract serial_number_check_reference (bytes 188-193)\n2. Extract record_serial_number (bytes 195-200)\n3. Verify: serial_number_check_reference = (record_serial_number - 1)\n4. If not equal: CRITICAL ERROR (file corruption)\n5. Handle overflow: If serial wraps from 999999 to 000002, check = 999999",
+      "aiNotes": "CRITICAL VALIDATION: Internal consistency check.\n\nRule: serial_number_check_reference = (record_serial_number - 1)\n\nExamples:\n\nValid:\n- check_reference = 000989, serial_number = 000990\n- Validation: 000989 = (000990 - 1) ✓\n\nValid (overflow):\n- check_reference = 999999, serial_number = 000002\n- Validation: 999999 = (000002 - 1) mod 1000000 ✓\n\nInvalid:\n- check_reference = 000989, serial_number = 000991\n- Validation: 000989 ≠ (000991 - 1) = 000990 ✗\n- ERROR: Internal inconsistency\n\nInvalid:\n- check_reference = 000990, serial_number = 000990\n- Validation: 000990 ≠ (000990 - 1) = 000989 ✗\n- ERROR: Check reference should be one less\n\nThis rule validates RT5 internal structure. Combined with sr.trailer_follows_previous, provides complete integrity validation."
+    },
+    {
+      "@id": "ssim.ch7.record_type_5#sr.trailer_follows_previous",
+      "id": "sr.trailer_follows_previous",
+      "description": "serial_number_check_reference must equal the record_serial_number of the immediately previous record (irrespective of record type). This validates file sequence integrity.",
+      "check": "external",
+      "severity": "error",
+      "validation_logic": "For each RT5 record:\n1. Get previous record's record_serial_number\n2. Compare to RT5 serial_number_check_reference\n3. If equal: Sequence is valid\n4. If not equal: Missing or corrupted records detected\n5. Log error with details: expected vs actual",
+      "aiNotes": "CRITICAL VALIDATION: Cross-record sequence validation.\n\nRule: RT5.serial_number_check_reference = previous_record.record_serial_number\n\nExample:\n\nValid sequence:\n- Record 989 (RT4): record_serial_number = 000989\n- Record 990 (RT5): serial_number_check_reference = 000989 ✓\n- Validation: 000989 = 000989 ✓\n\nInvalid (missing record):\n- Record 988 (RT4): record_serial_number = 000988\n- [Record 989 MISSING]\n- Record 990 (RT5): serial_number_check_reference = 000989\n- Validation: 000988 ≠ 000989 ✗\n- ERROR: Record 989 is missing!\n\nInvalid (wrong check reference):\n- Record 989 (RT4): record_serial_number = 000989\n- Record 990 (RT5): serial_number_check_reference = 000988\n- Validation: 000989 ≠ 000988 ✗\n- ERROR: Check reference incorrect (should be 000989)\n\nThis rule detects:\n- Missing records (gaps in sequence)\n- Corrupted serial numbers\n- Out-of-order records\n- File truncation\n\nImplementation:\n```elixir\ndef validate_rt5_sequence(trailer, previous_record) do\n  expected = previous_record.record_serial_number\n  actual = trailer.serial_number_check_reference\n  \n  if expected == actual do\n    :ok\n  else\n    {:error, \n     \"RT5 check reference mismatch: \" <>\n     \"expected #{expected} (from previous record), \" <>\n     \"got #{actual}\"}\n  end\nend\n```"
+    },
+    {
+      "@id": "ssim.ch7.record_type_5#sr.trailer_follows_carrier",
+      "id": "sr.trailer_follows_carrier",
+      "description": "A Trailer (RT5) must follow the set of records started by a Carrier (RT2). The RT5 closes the carrier block that began with the most recent RT2.",
+      "check": "external",
+      "severity": "error",
+      "validation_logic": "During file parse:\n1. Track most recent RT2 record\n2. When RT5 encountered, verify RT2 exists\n3. Verify RT5 airline_designator matches RT2 airline_designator\n4. Verify RT3/RT4 records exist between RT2 and RT5\n5. If continuation_end_code='C', expect RT2 next\n6. If continuation_end_code='E', mark file complete",
+      "aiNotes": "STRUCTURAL VALIDATION: RT5 must close an RT2 carrier block.\n\nValid structure:\n- RT1 (Header)\n- RT2 (Carrier: QF) ← Opens carrier block\n- RT3 (Flight Leg: QF1)\n- RT4 (Segment Data)\n- RT5 (Trailer: QF) ← Closes carrier block ✓\n\nInvalid (RT5 without RT2):\n- RT1 (Header)\n- RT3 (Flight Leg)\n- RT5 (Trailer) ✗ No RT2 before RT5\n\nInvalid (airline mismatch):\n- RT2 (Carrier: QF)\n- RT3 (Flight: QF1)\n- RT5 (Trailer: VA) ✗ Different airline\n\nValid (multi-carrier):\n- RT1 (Header)\n- RT2 (Carrier: QF) ← Opens QF block\n- RT3/RT4 (QF flights)\n- RT5 (Trailer: QF, code='C') ← Closes QF block, more coming\n- RT2 (Carrier: VA) ← Opens VA block\n- RT3/RT4 (VA flights)\n- RT5 (Trailer: VA, code='E') ← Closes VA block, end of file ✓\n\nValidation approach:\n```elixir\ndefmodule SSIMParser do\n  defstruct current_carrier: nil, carrier_stack: []\n  \n  def process_record(%{record_type: \"2\"} = rt2, state) do\n    # RT2 opens new carrier block\n    %{state | current_carrier: rt2.airline_designator}\n  end\n  \n  def process_record(%{record_type: \"5\"} = rt5, state) do\n    # RT5 closes carrier block\n    if state.current_carrier == nil do\n      {:error, \"RT5 without preceding RT2\"}\n    else\n      if rt5.airline_designator != state.current_carrier do\n        {:warn, \"RT5 airline (#{rt5.airline_designator}) != \" <>\n                \"RT2 airline (#{state.current_carrier})\"}\n      end\n      \n      # Check continuation code\n      case rt5.continuation_end_code do\n        \"C\" -> %{state | current_carrier: nil}  # Expect next RT2\n        \"E\" -> %{state | current_carrier: nil}  # End of file\n      end\n    end\n  end\nend\n```\n\nCarrier block lifecycle:\n1. RT2 opens block (sets current_carrier)\n2. RT3/RT4 records belong to current carrier\n3. RT5 closes block (clears current_carrier)\n4. If code='C': Expect new RT2 to open next block\n5. If code='E': No more carrier blocks"
+    },
+    {
+      "@id": "ssim.ch7.record_type_5#sr.continuation_code_next_record",
+      "id": "sr.continuation_code_next_record",
+      "description": "If continuation_end_code='C', the next record must be RT2 (Carrier). If continuation_end_code='E', expect end-of-file or block padding only.",
+      "check": "external",
+      "severity": "error",
+      "validation_logic": "After parsing RT5:\n1. If continuation_end_code='C':\n   - Expect next record to be RT2\n   - If next is not RT2: ERROR\n   - If EOF: ERROR (incomplete file)\n2. If continuation_end_code='E':\n   - Expect EOF or zero-padding\n   - If next record found: WARNING (data after end)\n   - Complete file integrity checks",
+      "aiNotes": "CONTROL FLOW VALIDATION: continuation_end_code determines what follows.\n\nRule 1: continuation_end_code='C' → Next record MUST be RT2\n\nValid:\n- RT5 (Trailer: QF, code='C')\n- RT2 (Carrier: VA) ← Next record is RT2 ✓\n\nInvalid:\n- RT5 (Trailer: QF, code='C')\n- RT3 (Flight Leg) ✗ Expected RT2, got RT3\n\nInvalid:\n- RT5 (Trailer: QF, code='C')\n- [End of file] ✗ Expected RT2, got EOF\n\nRule 2: continuation_end_code='E' → Expect end-of-file\n\nValid:\n- RT5 (Trailer: QF, code='E')\n- [Zero padding to 1000-byte block]\n- [End of file] ✓\n\nWarning:\n- RT5 (Trailer: QF, code='E')\n- RT2 (Carrier: VA) ⚠ Data after 'E' (should have used 'C')\n\nImplementation:\n```elixir\ndef validate_continuation(rt5, next_record) do\n  case {rt5.continuation_end_code, next_record} do\n    {\"C\", %{record_type: \"2\"}} ->\n      :ok  # Continue expected, RT2 found ✓\n    \n    {\"C\", %{record_type: other}} ->\n      {:error, \"continuation='C' but next record is RT#{other}, expected RT2\"}\n    \n    {\"C\", :eof} ->\n      {:error, \"continuation='C' but EOF reached, expected RT2\"}\n    \n    {\"E\", :eof} ->\n      :ok  # End expected, EOF found ✓\n    \n    {\"E\", padding} when is_padding?(padding) ->\n      :ok  # End expected, block padding found ✓\n    \n    {\"E\", %{record_type: type}} ->\n      {:warn, \"continuation='E' but found RT#{type} after, \" <>\n              \"possible file structure error\"}\n    \n    {invalid, _} ->\n      {:error, \"Invalid continuation_end_code: '#{invalid}'\"}\n  end\nend\n```\n\nCommon mistakes:\n1. Using 'E' when more carriers exist → Premature termination\n2. Using 'C' on last carrier → Parser expects more data, hits EOF\n3. Not validating next record type → Silently accept invalid structure"
+    },
+    {
+      "@id": "ssim.ch7.record_type_5#sr.block_padding",
+      "id": "sr.block_padding",
+      "description": "After a Trailer (RT5), pad remaining bytes of the 1000-byte block with zeros per SSIM specification. This ensures proper block alignment for legacy systems.",
+      "check": "external",
+      "severity": "warning",
+      "validation_logic": "After RT5 record:\n1. Calculate current position in 1000-byte block\n2. If not at block boundary:\n   - Calculate padding needed: 1000 - (position mod 1000)\n   - Verify padding bytes are zeros (0x00 or 0x30)\n   - Skip padding bytes\n3. If at block boundary: No padding needed\n4. Continue to next block (if continuation='C') or EOF (if continuation='E')",
+      "aiNotes": "BLOCK ALIGNMENT: SSIM uses 1000-byte blocks for legacy compatibility.\n\nBlock structure:\n- SSIM files organized in 1000-byte blocks\n- Each record is 200 bytes\n- 1 block = 5 records (5 × 200 = 1000)\n- After RT5, pad to next block boundary with zeros\n\nExample 1: RT5 at end of block (no padding needed)\n- Block 1: RT1 + RT2 + RT3 + RT4 + RT5 = 1000 bytes\n- Position: 1000 (exactly at block boundary)\n- Padding needed: 0 bytes ✓\n\nExample 2: RT5 in middle of block (padding needed)\n- Block 1: RT1 (000001) = bytes 0-199\n- Block 2: RT2 (000002) = bytes 200-399\n- Block 3: RT3 (000003) = bytes 400-599\n- Block 4: RT5 (000004) = bytes 600-799 ← RT5 at position 600\n- Position: 800 bytes (600 + 200)\n- Block boundary: 1000 bytes\n- Padding needed: 200 bytes (1000 - 800)\n- Padding: bytes 800-999 filled with zeros\n- Next block starts at byte 1000\n\nExample 3: RT5 at position 198,200\n- Position: 198,200 bytes\n- Current block: 198,000-198,999 (block 199)\n- RT5 ends at: 198,200 + 200 = 198,400\n- Block boundary: 199,000\n- Padding needed: 199,000 - 198,400 = 600 bytes\n- Padding: bytes 198,400-198,999 filled with zeros\n\nPadding character:\n- ASCII: 0x30 ('0' character, numeric zero)\n- EBCDIC: 0xF0 (EBCDIC zero)\n- NOT blank (0x20 / 0x40)\n- NOT null (0x00)\n\nValidation:\n```elixir\ndef validate_block_padding(file_position, encoding) do\n  padding_char = case encoding do\n    :ascii -> 0x30    # '0'\n    :ebcdic -> 0xF0   # EBCDIC '0'\n  end\n  \n  # Calculate position within current block\n  position_in_block = rem(file_position, 1000)\n  \n  # Calculate padding needed\n  padding_needed = if position_in_block == 0 do\n    0  # Already at block boundary\n  else\n    1000 - position_in_block\n  end\n  \n  if padding_needed > 0 do\n    # Read and validate padding bytes\n    padding_bytes = read_bytes(padding_needed)\n    if Enum.all?(padding_bytes, &(&1 == padding_char)) do\n      :ok\n    else\n      {:warn, \"Block padding contains non-zero bytes\"}\n    end\n  else\n    :ok\n  end\nend\n```\n\nWhy block padding?\n1. Legacy mainframe compatibility (fixed-block I/O)\n2. Tape storage systems (required block alignment)\n3. File integrity (detect truncation)\n4. Buffering efficiency (aligned reads)\n\nModern systems:\n- Often ignore block padding\n- Can read variable-length records\n- Still validate for compliance\n- Generate padding when writing SSIM files\n\nCommon issues:\n- Using blanks instead of zeros\n- No padding (violates SSIM spec)\n- Incorrect padding calculation\n- Padding after 'E' but not after 'C'"
+    },
+    {
+      "@id": "ssim.ch7.record_type_5#sr.record_serial_overflow",
+      "id": "sr.record_serial_overflow",
+      "description": "Record Serial Numbers are 6-digit numeric fields (000001-999999). If the record count exceeds 999999, numbering must restart at 000002 because 000001 is reserved for the Header Record (RT1).",
+      "check": "external",
+      "severity": "warning",
+      "validation_logic": "Monitor record_serial_number throughout file parse:\n1. RT1 must be 000001\n2. Subsequent records increment sequentially\n3. If record_serial_number reaches 999999:\n   - Next record should wrap to 000002 (skip 000001)\n   - Log warning about overflow\n4. Detect gaps or duplicates in sequence\n5. Verify continuity across overflow boundary\n6. Update serial_number_check_reference validation to handle wrap",
+      "aiNotes": "OVERFLOW HANDLING: Very rare but specified in SSIM.\n\nNormal sequence (no overflow):\n- 000001: RT1 (Header)\n- 000002: RT2 (Carrier)\n- 000003: RT3 (Flight Leg)\n- ...\n- 000990: RT5 (Trailer)\n\nOverflow sequence (extremely rare, 1M+ record files):\n- 000001: RT1 (Header)\n- ...\n- 999998: RT4 (Segment Data)\n- 999999: RT4 (Segment Data) ← Maximum value\n- 000002: RT4 (Segment Data) ← Wrapped! Skip 000001 (reserved for RT1)\n- 000003: RT4 (Segment Data)\n- ...\n- NNNNNN: RT5 (Trailer)\n\nKey rules:\n1. 000001 is ALWAYS reserved for RT1 (Header)\n2. Overflow wraps to 000002 (not 000000 or 000001)\n3. Must maintain sequential increments (no gaps)\n4. Log warning when overflow occurs\n\nserial_number_check_reference with overflow:\nRT4 (999999): record_serial_number = 999999\nRT5 (000002): serial_number_check_reference = 999999 ✓\nRT5 (000002): record_serial_number = 000002 ✓\n\nValidation with overflow:\n```elixir\ndef next_serial_number(current) do\n  case current do\n    999999 -> \n      Logger.warn(\"Serial number overflow: wrapping from 999999 to 000002\")\n      2\n    \n    n when n >= 1 and n < 999999 -> \n      n + 1\n    \n    invalid ->\n      {:error, \"Invalid serial number: #{invalid}\"}\n  end\nend\n\ndef validate_serial_sequence(previous, current) do\n  expected = next_serial_number(previous)\n  \n  if current == expected do\n    :ok\n  else\n    {:error, \"Serial sequence broken: \" <>\n             \"expected #{expected}, got #{current} \" <>\n             \"(previous was #{previous})\"}\n  end\nend\n```\n\nReality check:\n- 999,999 records × 200 bytes = ~200MB\n- Most SSIM files are < 100,000 records (< 20MB)\n- Overflow is theoretical but must be handled\n- Large airlines might approach this limit\n- Consolidator files (multiple airlines) could overflow\n\nEdge cases:\n- RT1 must always be 000001 (never changes)\n- Can't have RT1 after overflow (would be 000002)\n- If overflow occurs, RT5 might have serial < RT1 serial\n- File integrity checks must handle wrap-around\n\nBest practice:\n- Track highest serial number seen\n- Detect overflow transitions (999999 → 000002)\n- Log warnings for debugging\n- Validate using modulo arithmetic if needed\n- Consider splitting very large files before overflow"
+    }
+  ],
+  "relationships": [
+    {
+      "@type": "Relationship",
+      "relationType": "closes",
+      "target": "ssim.ch7.record_type_2",
+      "description": "Each RT5 (Trailer) closes exactly one RT2 (Carrier Record), marking the end of that carrier's schedule data block. The RT5 airline_designator should match the RT2 it's closing.",
+      "cardinality": "one-to-one",
+      "aiNotes": "RT5 → RT2 relationship:\n\nEach carrier block opened by RT2 must be closed by RT5:\n- RT2 (Carrier: QF) ← Opens block\n  - RT3/RT4 records for QF\n- RT5 (Trailer: QF) ← Closes block\n\nValidation:\n- RT5.airline_designator should match RT2.airline_designator\n- If mismatch: Warning (possible structure error)\n\nMulti-carrier files have multiple RT2/RT5 pairs:\n- RT2 (QF) → RT5 (QF)\n- RT2 (VA) → RT5 (VA)\n- RT2 (JQ) → RT5 (JQ)\n\nEach RT5 closes ONLY the most recent RT2."
+    },
+    {
+      "@type": "Relationship",
+      "relationType": "precedes",
+      "target": "ssim.ch7.record_type_2",
+      "description": "If continuation_end_code='C', the RT5 is followed by another RT2 (Carrier Record). If continuation_end_code='E', the RT5 is the last record (end of file).",
+      "cardinality": "zero-or-one",
+      "aiNotes": "RT5 → next RT2 relationship (conditional):\n\nIf continuation_end_code='C':\n- RT5 is followed by another RT2\n- Cardinality: one-to-one (RT5 → RT2)\n\nIf continuation_end_code='E':\n- RT5 is NOT followed by RT2\n- Cardinality: zero (RT5 → nothing)\n\nExample with 'C':\n- RT5 (QF, code='C') → RT2 (VA) ✓\n\nExample with 'E':\n- RT5 (QF, code='E') → EOF ✓"
+    },
+    {
+      "@type": "Relationship",
+      "relationType": "sequentialOrder",
+      "target": "ssim.ch7.record_type_5",
+      "description": "RT5 records appear in sequential order by record_serial_number, closing each carrier block in the file.",
+      "cardinality": "one-to-many",
+      "aiNotes": "RT5 ordering in multi-carrier files:\n\nSequential order by serial number:\n- RT5 (QF, serial=000500)\n- RT5 (VA, serial=001000)\n- RT5 (JQ, serial=001500)\n\nEach RT5 closes one carrier block, appearing after all RT3/RT4 for that carrier."
+    }
+  ],
+  "extensions": [
+    {
+      "@type": "Extension",
+      "@id": "ssim.ch7.record_type_5#ext_file_integrity",
+      "name": "file_integrity",
+      "description": "Computed integrity checks for the entire SSIM file. Validates that the file structure is complete and consistent.",
+      "type": "object",
+      "loadingStrategy": "computed",
+      "properties": {
+        "has_header": {
+          "type": "boolean",
+          "description": "True if RT1 header record exists"
+        },
+        "has_trailer": {
+          "type": "boolean",
+          "description": "True if RT5 trailer record exists (this record)"
+        },
+        "record_count_matches": {
+          "type": "boolean",
+          "description": "True if actual record count matches RT5 serial number"
+        },
+        "expected_records": {
+          "type": "integer",
+          "description": "Expected total records (from RT5 record_serial_number)"
+        },
+        "actual_records": {
+          "type": "integer",
+          "description": "Actual number of records parsed"
+        },
+        "missing_records": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "List of missing record serial numbers (if any gaps detected)"
+        },
+        "is_complete": {
+          "type": "boolean",
+          "description": "True if file has no missing/duplicate records"
+        }
+      },
+      "exampleUsage": "%TrailerRecord{\n  record_type: \"5\",\n  record_serial_number: 5432,\n  file_integrity: %FileIntegrity{\n    has_header: true,\n    has_trailer: true,\n    record_count_matches: true,\n    expected_records: 5432,\n    actual_records: 5432,\n    missing_records: [],\n    is_complete: true\n  }\n}",
+      "notes": [
+        "Computed after full file parse",
+        "Detects missing/duplicate records",
+        "Enables data quality validation before ingestion",
+        "Can trigger alerts if file is incomplete"
+      ],
+      "aiNotes": "FILE INTEGRITY EXTENSION: Comprehensive file validation.\n\nPurpose:\nProvides complete file integrity metrics computed at parse completion.\n\nFields:\n\n1. **has_header** (boolean):\n   - True: RT1 record found with serial_number = 000001\n   - False: No RT1 or RT1 has wrong serial number\n   - Critical: Every SSIM file MUST have RT1\n\n2. **has_trailer** (boolean):\n   - True: RT5 record exists (this record)\n   - False: File ends without RT5 (incomplete)\n   - Important: RT5 marks proper file closure\n\n3. **record_count_matches** (boolean):\n   - True: actual_records = expected_records\n   - False: Mismatch (file corruption)\n   - Comparison: actual vs RT5 serial_number\n\n4. **expected_records** (integer):\n   - Value from RT5 record_serial_number\n   - Example: RT5 serial = 5432 → expect 5432 records\n\n5. **actual_records** (integer):\n   - Count of records actually parsed\n   - Example: Parsed 5432 records from file\n\n6. **missing_records** (array of integers):\n   - List of serial numbers with gaps\n   - Example: [156, 157, 891] if records 156, 157, 891 are missing\n   - Empty array = no gaps (good)\n\n7. **is_complete** (boolean):\n   - True: All validations pass, no issues\n   - False: Problems detected (missing records, count mismatch, etc.)\n   - Overall file health indicator\n\nComputation:\n```elixir\ndef compute_file_integrity(records) do\n  header = Enum.find(records, &(&1.record_type == \"1\"))\n  trailer = Enum.find(records, &(&1.record_type == \"5\"))\n  \n  expected = if trailer, do: trailer.record_serial_number, else: 0\n  actual = length(records)\n  \n  # Detect missing records\n  serial_numbers = Enum.map(records, & &1.record_serial_number) |> Enum.sort()\n  missing = detect_gaps(serial_numbers)\n  \n  %FileIntegrity{\n    has_header: header != nil && header.record_serial_number == 1,\n    has_trailer: trailer != nil,\n    record_count_matches: expected == actual,\n    expected_records: expected,\n    actual_records: actual,\n    missing_records: missing,\n    is_complete: header != nil && trailer != nil && \n                 expected == actual && missing == []\n  }\nend\n\ndef detect_gaps(serial_numbers) do\n  serial_numbers\n  |> Enum.chunk_every(2, 1, :discard)\n  |> Enum.flat_map(fn [a, b] ->\n    if b == a + 1 do\n      []  # No gap\n    else\n      # Gap detected, list missing serials\n      Enum.to_list((a + 1)..(b - 1))\n    end\n  end)\nend\n```\n\nUse cases:\n\n1. **Pre-ingestion validation**:\n   ```elixir\n   if trailer.file_integrity.is_complete do\n     ingest_file(records)\n   else\n     log_error(\"File incomplete: #{inspect(trailer.file_integrity)}\")\n     reject_file()\n   end\n   ```\n\n2. **Data quality metrics**:\n   ```elixir\n   metrics = %{\n     files_processed: count_files(),\n     complete_files: count_where(is_complete: true),\n     incomplete_files: count_where(is_complete: false),\n     avg_file_size: avg(expected_records)\n   }\n   ```\n\n3. **Alert triggers**:\n   ```elixir\n   if !trailer.file_integrity.is_complete do\n     alert = %Alert{\n       severity: :error,\n       message: \"SSIM file incomplete\",\n       details: trailer.file_integrity,\n       action: \"Reject file and request resend\"\n     }\n     send_alert(alert)\n   end\n   ```\n\nExample scenarios:\n\nComplete file:\n```elixir\n%FileIntegrity{\n  has_header: true,\n  has_trailer: true,\n  record_count_matches: true,\n  expected_records: 5432,\n  actual_records: 5432,\n  missing_records: [],\n  is_complete: true  ✓\n}\n```\n\nIncomplete file (missing records):\n```elixir\n%FileIntegrity{\n  has_header: true,\n  has_trailer: true,\n  record_count_matches: false,  ✗\n  expected_records: 5432,\n  actual_records: 5429,  ✗ (3 missing)\n  missing_records: [156, 157, 891],  ✗\n  is_complete: false  ✗\n}\n```\n\nCorrupted file (no trailer):\n```elixir\n%FileIntegrity{\n  has_header: true,\n  has_trailer: false,  ✗\n  record_count_matches: false,\n  expected_records: 0,  ✗ (no RT5 to get count from)\n  actual_records: 3456,\n  missing_records: [],\n  is_complete: false  ✗\n}\n```"
+    },
+    {
+      "@type": "Extension",
+      "@id": "ssim.ch7.record_type_5#ext_record_type_summary",
+      "name": "record_type_summary",
+      "description": "Summary of record types present in the SSIM file. Provides quick breakdown of file contents.",
+      "type": "object",
+      "loadingStrategy": "computed",
+      "properties": {
+        "header_count": {
+          "type": "integer",
+          "description": "Number of RT1 records (should be 1)"
+        },
+        "carrier_count": {
+          "type": "integer",
+          "description": "Number of RT2 carrier records"
+        },
+        "flight_leg_count": {
+          "type": "integer",
+          "description": "Number of RT3 flight leg records"
+        },
+        "segment_count": {
+          "type": "integer",
+          "description": "Number of RT4 segment data records"
+        },
+        "trailer_count": {
+          "type": "integer",
+          "description": "Number of RT5 trailer records (should equal carrier_count)"
+        },
+        "total_records": {
+          "type": "integer",
+          "description": "Total records in file"
+        }
+      },
+      "exampleUsage": "%TrailerRecord{\n  record_serial_number: 5432,\n  record_type_summary: %RecordTypeSummary{\n    header_count: 1,\n    carrier_count: 5,\n    flight_leg_count: 3200,\n    segment_count: 2225,\n    trailer_count: 5,\n    total_records: 5432\n  }\n}",
+      "notes": [
+        "Computed by counting record types during parse",
+        "Useful for understanding file composition",
+        "Can detect anomalies (e.g., no RT2 or RT3 records)",
+        "Supports file quality metrics"
+      ],
+      "aiNotes": "RECORD TYPE SUMMARY: File composition metrics.\n\nPurpose:\nProvides breakdown of record types for quick file understanding.\n\nComputation:\n```elixir\ndef compute_record_type_summary(records) do\n  counts = Enum.group_by(records, & &1.record_type)\n           |> Enum.map(fn {type, recs} -> {type, length(recs)} end)\n           |> Map.new()\n  \n  %RecordTypeSummary{\n    header_count: Map.get(counts, \"1\", 0),\n    carrier_count: Map.get(counts, \"2\", 0),\n    flight_leg_count: Map.get(counts, \"3\", 0),\n    segment_count: Map.get(counts, \"4\", 0),\n    trailer_count: Map.get(counts, \"5\", 0),\n    total_records: length(records)\n  }\nend\n```\n\nValidation insights:\n\n1. **header_count should be 1**:\n   - If 0: Missing header (critical error)\n   - If > 1: Duplicate headers (structure error)\n\n2. **carrier_count = trailer_count**:\n   - Each carrier (RT2) must have trailer (RT5)\n   - If carrier_count > trailer_count: Incomplete carrier blocks\n   - If trailer_count > carrier_count: Extra trailers (structure error)\n\n3. **flight_leg_count > 0**:\n   - If 0: No flight data (empty schedule file)\n   - Typical: Hundreds to thousands of flight legs\n\n4. **segment_count optional**:\n   - Can be 0 (RT4 is optional)\n   - Typical: 0.5-2× flight_leg_count (average DEIs per flight)\n\n5. **total_records = sum of all counts**:\n   - Validation: header + carrier + flight_leg + segment + trailer = total\n\nExample scenarios:\n\nTypical single-carrier file:\n```elixir\n%RecordTypeSummary{\n  header_count: 1,       # RT1\n  carrier_count: 1,      # 1 airline\n  flight_leg_count: 500, # 500 flights\n  segment_count: 750,    # 1.5 DEIs per flight avg\n  trailer_count: 1,      # 1 RT5\n  total_records: 1252    # 1+1+500+750+1 = 1253 ✗ Mismatch!\n}\n```\n\nTypical multi-carrier file:\n```elixir\n%RecordTypeSummary{\n  header_count: 1,        # RT1\n  carrier_count: 5,       # 5 airlines\n  flight_leg_count: 3200, # 3200 flights total\n  segment_count: 2225,    # 0.7 DEIs per flight avg\n  trailer_count: 5,       # 5 RT5s (one per carrier)\n  total_records: 5432     # 1+5+3200+2225+5 = 5436 ✗ Mismatch!\n}\n```\n\nAnomalous file (no flights):\n```elixir\n%RecordTypeSummary{\n  header_count: 1,\n  carrier_count: 1,\n  flight_leg_count: 0,  ✗ No flights!\n  segment_count: 0,\n  trailer_count: 1,\n  total_records: 3      # 1+1+0+0+1 = 3\n}\n```\n\nUse cases:\n\n1. **File classification**:\n   ```elixir\n   cond do\n     summary.carrier_count == 1 -> :single_carrier\n     summary.carrier_count > 1 -> :multi_carrier\n     true -> :invalid\n   end\n   ```\n\n2. **Capacity planning**:\n   ```elixir\n   # Estimate processing time\n   time_per_flight = 10  # ms\n   estimated_time = summary.flight_leg_count * time_per_flight\n   ```\n\n3. **Anomaly detection**:\n   ```elixir\n   anomalies = []\n   if summary.header_count != 1, do: anomalies = [\"header_count != 1\" | anomalies]\n   if summary.carrier_count != summary.trailer_count, do: anomalies = [\"carrier/trailer mismatch\" | anomalies]\n   if summary.flight_leg_count == 0, do: anomalies = [\"no flights\" | anomalies]\n   \n   if anomalies != [], do: alert(anomalies)\n   ```"
+    },
+    {
+      "@type": "Extension",
+      "@id": "ssim.ch7.record_type_5#ext_processing_summary",
+      "name": "processing_summary",
+      "description": "Summary of parsing/processing results for the entire file. Companion to RT1's processing_metadata - provides end-of-file stats.",
+      "type": "object",
+      "loadingStrategy": "computed",
+      "properties": {
+        "parse_duration_ms": {
+          "type": "integer",
+          "description": "Total parsing time in milliseconds"
+        },
+        "bytes_processed": {
+          "type": "integer",
+          "description": "Total bytes processed from source file"
+        },
+        "records_per_second": {
+          "type": "number",
+          "description": "Parsing throughput (records/second)"
+        },
+        "errors_encountered": {
+          "type": "integer",
+          "description": "Total number of parsing errors"
+        },
+        "warnings_encountered": {
+          "type": "integer",
+          "description": "Total number of warnings"
+        },
+        "successfully_parsed": {
+          "type": "integer",
+          "description": "Number of records successfully parsed"
+        },
+        "failed_to_parse": {
+          "type": "integer",
+          "description": "Number of records that failed parsing"
+        },
+        "completion_status": {
+          "type": "string",
+          "enum": [
+            "success",
+            "partial",
+            "failed"
+          ],
+          "description": "Overall parsing status"
+        }
+      },
+      "exampleUsage": "%TrailerRecord{\n  record_serial_number: 5432,\n  processing_summary: %ProcessingSummary{\n    parse_duration_ms: 1234,\n    bytes_processed: 1_086_400,  # 5432 * 200 bytes\n    records_per_second: 4401.9,\n    errors_encountered: 0,\n    warnings_encountered: 12,\n    successfully_parsed: 5432,\n    failed_to_parse: 0,\n    completion_status: \"success\"\n  }\n}",
+      "notes": [
+        "Computed at end of file parse",
+        "Complements RT1's processing_metadata (start-of-file)",
+        "Useful for performance monitoring and SLO tracking",
+        "Can trigger alerts if parsing is slow or error-prone",
+        "Enables processing report for each SSIM file"
+      ],
+      "aiNotes": "PROCESSING SUMMARY: End-of-parse metrics.\n\nPurpose:\nProvides comprehensive parsing statistics computed after full file processing.\n\nFields:\n\n1. **parse_duration_ms** (integer):\n   - Total time to parse entire file (milliseconds)\n   - Start: First byte read\n   - End: RT5 processed and validated\n   - Example: 1234 ms = 1.234 seconds\n\n2. **bytes_processed** (integer):\n   - Total bytes read from source file\n   - Calculation: total_records × 200 bytes\n   - Example: 5432 records × 200 = 1,086,400 bytes (~1 MB)\n\n3. **records_per_second** (float):\n   - Parsing throughput metric\n   - Calculation: total_records / (parse_duration_ms / 1000)\n   - Example: 5432 / 1.234 = 4401.9 records/sec\n\n4. **errors_encountered** (integer):\n   - Count of ERRORS during parsing\n   - Examples: Invalid field format, missing required field, wrong record length\n   - 0 = perfect parse\n\n5. **warnings_encountered** (integer):\n   - Count of WARNINGS during parsing\n   - Examples: Unknown DEI, blank optional field, minor format issue\n   - Can be > 0 even for successful parse\n\n6. **successfully_parsed** (integer):\n   - Number of records parsed without errors\n   - Should equal total_records if no errors\n\n7. **failed_to_parse** (integer):\n   - Number of records that failed parsing\n   - Should be 0 for successful parse\n\n8. **completion_status** (enum):\n   - 'success': All records parsed, no errors\n   - 'partial': Some records failed, but file processable\n   - 'failed': Too many errors, file unusable\n\nComputation:\n```elixir\ndef compute_processing_summary(parse_state) do\n  duration_ms = parse_state.end_time - parse_state.start_time\n  records_per_sec = parse_state.total_records / (duration_ms / 1000)\n  \n  status = cond do\n    parse_state.errors == 0 -> \"success\"\n    parse_state.failed_to_parse < parse_state.total_records * 0.1 -> \"partial\"\n    true -> \"failed\"\n  end\n  \n  %ProcessingSummary{\n    parse_duration_ms: duration_ms,\n    bytes_processed: parse_state.total_records * 200,\n    records_per_second: records_per_sec,\n    errors_encountered: parse_state.errors,\n    warnings_encountered: parse_state.warnings,\n    successfully_parsed: parse_state.total_records - parse_state.failed_to_parse,\n    failed_to_parse: parse_state.failed_to_parse,\n    completion_status: status\n  }\nend\n```\n\nExample scenarios:\n\nPerfect parse:\n```elixir\n%ProcessingSummary{\n  parse_duration_ms: 1234,\n  bytes_processed: 1_086_400,\n  records_per_second: 4401.9,\n  errors_encountered: 0,       ✓\n  warnings_encountered: 12,    ⚠ (minor issues)\n  successfully_parsed: 5432,   ✓\n  failed_to_parse: 0,          ✓\n  completion_status: \"success\" ✓\n}\n```\n\nPartial parse (some errors):\n```elixir\n%ProcessingSummary{\n  parse_duration_ms: 1500,\n  bytes_processed: 1_086_400,\n  records_per_second: 3621.3,\n  errors_encountered: 45,        ✗\n  warnings_encountered: 156,     ⚠\n  successfully_parsed: 5387,     ⚠ (45 failed)\n  failed_to_parse: 45,           ✗\n  completion_status: \"partial\"   ⚠\n}\n```\n\nFailed parse (too many errors):\n```elixir\n%ProcessingSummary{\n  parse_duration_ms: 2000,\n  bytes_processed: 1_086_400,\n  records_per_second: 2716.0,\n  errors_encountered: 1234,      ✗✗\n  warnings_encountered: 2345,    ⚠⚠\n  successfully_parsed: 4198,     ✗ (1234 failed)\n  failed_to_parse: 1234,         ✗✗ (>10% failure rate)\n  completion_status: \"failed\"    ✗✗\n}\n```\n\nUse cases:\n\n1. **Performance monitoring**:\n   ```elixir\n   if summary.records_per_second < 1000 do\n     alert(\"Slow parsing: #{summary.records_per_second} rec/sec\")\n   end\n   ```\n\n2. **SLO tracking**:\n   ```elixir\n   # SLO: 99% successful parse rate\n   success_rate = summary.successfully_parsed / (summary.successfully_parsed + summary.failed_to_parse)\n   \n   if success_rate < 0.99 do\n     slo_breach(\"Parse success rate: #{success_rate}\")\n   end\n   ```\n\n3. **Processing report**:\n   ```elixir\n   report = \"\"\"\n   SSIM File Processing Report\n   ===========================\n   File: #{filename}\n   Duration: #{summary.parse_duration_ms} ms\n   Throughput: #{summary.records_per_second} records/sec\n   Total Records: #{summary.successfully_parsed + summary.failed_to_parse}\n   Successful: #{summary.successfully_parsed}\n   Failed: #{summary.failed_to_parse}\n   Errors: #{summary.errors_encountered}\n   Warnings: #{summary.warnings_encountered}\n   Status: #{summary.completion_status}\n   \"\"\"\n   log_report(report)\n   ```\n\n4. **Comparison with RT1 metadata**:\n   ```elixir\n   rt1 = find_header(records)\n   rt5 = find_trailer(records)\n   \n   comparison = %{\n     file_creation: rt1.processing_metadata.created_at,\n     parse_started: rt1.processing_metadata.parsed_at,\n     parse_completed: rt5.processing_summary.completed_at,\n     total_duration: rt5.processing_summary.parse_duration_ms\n   }\n   ```"
+    }
+  ],
+  "training": {
+    "examples": [
+      {
+        "@type": "TrainingExample",
+        "id": "example_rt5_single_carrier_end",
+        "title": "RT5 Trailer for single-carrier file (continuation_end_code='E')",
+        "encoding": "ASCII",
+        "rawRecord": "5 XX 03DEC21                                                                                                                                                                               000989E000990",
+        "decoded": {
+          "record_type": "5",
+          "spare_1": " ",
+          "airline_designator": "XX ",
+          "release_sell_date": "03DEC21",
+          "spare_2": "                                                                                                                                                               ",
+          "serial_number_check_reference": 989,
+          "continuation_end_code": "E",
+          "record_serial_number": 990
+        },
+        "decodedJson": "{\n  \"record_type\": \"5\",\n  \"airline_designator\": \"XX\",\n  \"release_sell_date\": \"03DEC21\",\n  \"serial_number_check_reference\": 989,\n  \"continuation_end_code\": \"E\",\n  \"record_serial_number\": 990\n}",
+        "linkedRt2": {
+          "record_serial_number": 2,
+          "airline_designator": "XX ",
+          "comment": "This RT5 closes the carrier block opened by RT2 (serial=2)"
+        },
+        "previousRecord": {
+          "record_type": "4",
+          "record_serial_number": 989,
+          "comment": "Previous record was RT4 with serial 989"
+        },
+        "explanation": "This RT5 marks the end of a single-carrier SSIM file. The continuation_end_code='E' indicates this is the LAST carrier block - no more data follows. serial_number_check_reference=989 matches the previous record's serial number, and record_serial_number=990 is one greater, confirming sequence integrity. release_sell_date='03DEC21' indicates this schedule was released for sale on December 3, 2021. After this record, the file ends (possibly with block padding to 1000-byte boundary).",
+        "aiNotes": "TRAINING: Single-carrier file termination.\n\nKey points:\n1. continuation_end_code='E' means END OF FILE\n2. serial_number_check_reference (989) = previous record's serial\n3. record_serial_number (990) = check_reference + 1\n4. airline_designator='XX ' matches the RT2 this closes\n5. release_sell_date is optional but present here\n\nFile structure:\n- Record 1: RT1 (Header)\n- Record 2: RT2 (Carrier XX)\n- Records 3-989: RT3/RT4 (XX flights and segments)\n- Record 990: RT5 (Trailer XX, code='E') ← This record\n- [End of file]\n\nValidation checks:\n- record_type = '5' ✓\n- serial_number_check_reference = 989 ✓\n- record_serial_number = 990 ✓\n- 989 = (990 - 1) ✓\n- continuation_end_code = 'E' ✓\n- No RT2 expected after this ✓\n\nWhat happens next:\n- Parser validates file integrity\n- Confirms total records = 990\n- Checks for block padding\n- Marks parse complete\n- Returns successfully parsed file"
+      },
+      {
+        "@type": "TrainingExample",
+        "id": "example_rt5_multi_carrier_continue",
+        "title": "RT5 Trailer for multi-carrier file (continuation_end_code='C')",
+        "encoding": "ASCII",
+        "rawRecord": "5 QF                                                                                                                                                                                      003456C003457",
+        "decoded": {
+          "record_type": "5",
+          "spare_1": " ",
+          "airline_designator": "QF ",
+          "release_sell_date": "       ",
+          "spare_2": "                                                                                                                                                               ",
+          "serial_number_check_reference": 3456,
+          "continuation_end_code": "C",
+          "record_serial_number": 3457
+        },
+        "decodedJson": "{\n  \"record_type\": \"5\",\n  \"airline_designator\": \"QF\",\n  \"release_sell_date\": null,\n  \"serial_number_check_reference\": 3456,\n  \"continuation_end_code\": \"C\",\n  \"record_serial_number\": 3457\n}",
+        "linkedRt2": {
+          "record_serial_number": 2,
+          "airline_designator": "QF ",
+          "comment": "This RT5 closes Qantas carrier block"
+        },
+        "previousRecord": {
+          "record_type": "4",
+          "record_serial_number": 3456,
+          "comment": "Previous record was RT4 with serial 3456"
+        },
+        "nextRecord": {
+          "record_type": "2",
+          "record_serial_number": 3458,
+          "airline_designator": "VA ",
+          "comment": "Next record must be RT2 (Virgin Australia) because continuation='C'"
+        },
+        "explanation": "This RT5 closes the Qantas (QF) carrier block in a multi-carrier file. The continuation_end_code='C' (Continue) indicates MORE carrier blocks follow - the next record must be RT2 for another airline. release_sell_date is blank (not used). The serial numbers validate correctly: check_reference=3456 matches previous record, serial=3457 is one greater. After this RT5, we expect RT2 for another carrier (e.g., Virgin Australia).",
+        "aiNotes": "TRAINING: Multi-carrier file with continuation.\n\nKey points:\n1. continuation_end_code='C' means CONTINUE (more carriers coming)\n2. release_sell_date blank (optional field not used)\n3. Next record MUST be RT2 (different airline)\n4. This RT5 closes QF block, next RT2 opens new carrier block\n\nFile structure:\n- Record 1: RT1 (Header)\n- Record 2: RT2 (Carrier: QF - Qantas)\n- Records 3-3456: RT3/RT4 (QF flights)\n- Record 3457: RT5 (Trailer: QF, code='C') ← This record\n- Record 3458: RT2 (Carrier: VA - Virgin Australia) ← MUST be RT2\n- Records 3459+: RT3/RT4 (VA flights)\n- ...\n- Record N: RT5 (Trailer: VA, code='E' or 'C')\n\nValidation:\n- continuation_end_code = 'C' → Expect RT2 next\n- Next record type must be '2' (Carrier)\n- If next is NOT RT2: ERROR (structure violation)\n- If EOF: ERROR (file incomplete, expected more data)\n\nCommon in:\n- Consolidator files (multiple airlines in one file)\n- Regional schedule aggregations\n- Code-share partners grouped together\n\nCarrier blocks:\n1. QF block: RT2 (002) → RT3/RT4 (003-3456) → RT5 (3457, code='C')\n2. VA block: RT2 (3458) → RT3/RT4 (3459-N) → RT5 (N, code='C' or 'E')\n3. More blocks if code='C', or end if code='E'"
+      },
+      {
+        "@type": "TrainingExample",
+        "id": "example_rt5_with_extensions",
+        "title": "RT5 with computed extension fields (file_integrity, record_type_summary, processing_summary)",
+        "encoding": "ASCII",
+        "rawRecord": "5 XX                                                                                                                                                                                      005431E005432",
+        "decoded": {
+          "record_type": "5",
+          "spare_1": " ",
+          "airline_designator": "XX ",
+          "release_sell_date": "       ",
+          "spare_2": "                                                                                                                                                               ",
+          "serial_number_check_reference": 5431,
+          "continuation_end_code": "E",
+          "record_serial_number": 5432
+        },
+        "decodedJson": "{\n  \"record_type\": \"5\",\n  \"airline_designator\": \"XX\",\n  \"release_sell_date\": null,\n  \"serial_number_check_reference\": 5431,\n  \"continuation_end_code\": \"E\",\n  \"record_serial_number\": 5432\n}",
+        "file_integrity": {
+          "has_header": true,
+          "has_trailer": true,
+          "record_count_matches": true,
+          "expected_records": 5432,
+          "actual_records": 5432,
+          "missing_records": [],
+          "is_complete": true
+        },
+        "record_type_summary": {
+          "header_count": 1,
+          "carrier_count": 1,
+          "flight_leg_count": 3200,
+          "segment_count": 2229,
+          "trailer_count": 1,
+          "total_records": 5432
+        },
+        "processing_summary": {
+          "parse_duration_ms": 1234,
+          "bytes_processed": 1086400,
+          "records_per_second": 4401.9,
+          "errors_encountered": 0,
+          "warnings_encountered": 12,
+          "successfully_parsed": 5432,
+          "failed_to_parse": 0,
+          "completion_status": "success"
+        },
+        "explanation": "This RT5 demonstrates all three extension fields computed after successful file parse. file_integrity shows the file is complete with no missing records. record_type_summary breaks down the 5432 total records: 1 header, 1 carrier, 3200 flight legs, 2229 segments, and 1 trailer. processing_summary shows excellent parse performance: 1.234 seconds total, 4401.9 records/sec throughput, zero errors, only 12 warnings (likely minor formatting issues), and 'success' status. This represents a high-quality SSIM file with good data integrity.",
+        "aiNotes": "TRAINING: Complete RT5 with all extensions.\n\nExtension field breakdown:\n\n**file_integrity** (computed after parse):\n- has_header: true ✓ (RT1 exists)\n- has_trailer: true ✓ (this RT5 exists)\n- record_count_matches: true ✓ (5432 actual = 5432 expected)\n- expected_records: 5432 (from this RT5's serial_number)\n- actual_records: 5432 (counted during parse)\n- missing_records: [] (no gaps in sequence)\n- is_complete: true ✓ (all validations pass)\n\n**record_type_summary** (counted during parse):\n- header_count: 1 ✓ (exactly one RT1)\n- carrier_count: 1 ✓ (single carrier file)\n- flight_leg_count: 3200 (3200 RT3 records)\n- segment_count: 2229 (2229 RT4 records, ~0.7 DEIs per flight)\n- trailer_count: 1 ✓ (exactly one RT5)\n- total_records: 5432 = 1+1+3200+2229+1 ✓\n\n**processing_summary** (computed at parse completion):\n- parse_duration_ms: 1234 (1.234 seconds)\n- bytes_processed: 1,086,400 (5432 × 200 bytes)\n- records_per_second: 4401.9 (excellent throughput)\n- errors_encountered: 0 ✓ (perfect parse)\n- warnings_encountered: 12 (minor issues, acceptable)\n- successfully_parsed: 5432 ✓ (all records)\n- failed_to_parse: 0 ✓ (no failures)\n- completion_status: 'success' ✓\n\nFile composition analysis:\n- Total records: 5432\n- Flight legs: 3200 (58.9% of records)\n- Segments: 2229 (41.0% of records)\n- Average DEIs per flight: 2229 / 3200 = 0.7\n- File size: ~1.04 MB\n- Parse time: 1.234 sec\n- Throughput: 4402 rec/sec (~850 KB/sec)\n\nQuality indicators:\n- is_complete: true → High quality\n- errors: 0 → Excellent\n- warnings: 12 → Acceptable (0.22% warning rate)\n- success status → Ready for ingestion\n\nUse case:\nThis file is ready for production ingestion. All integrity checks pass, performance is excellent, and data quality is high."
+      }
+    ],
+    "notes": [
+      "RT5 is the simplest record type (only 7 active fields, rest reserved)",
+      "serial_number_check_reference provides critical integrity validation",
+      "continuation_end_code determines file structure (more carriers or end)",
+      "RT5 must close a carrier block opened by RT2",
+      "Block padding (zeros to 1000-byte boundary) follows RT5 if needed",
+      "Extensions provide comprehensive file quality and performance metrics",
+      "release_sell_date is optional - often blank",
+      "RT5 serial_number determines expected total file record count",
+      "Every carrier block (RT2) must have corresponding trailer (RT5)",
+      "Multi-carrier files have multiple RT2/RT5 pairs, each with continuation code"
+    ]
+  },
+  "references": [
+    "IATA SSIM, March 2011 — 7.5.5 Trailer Record (Record Type 5)",
+    "IATA SSIM, March 2011 — Chapter 7 (Record Formats)",
+    "IATA SSIM, March 2011 — Chapter 2 (Block Padding Specifications)"
+  ],
+  "implementationQuirks": [
+    "Validate fixed-length fields; pad/truncate to required byte offsets.",
+    "Enforce 200-byte fixed-length for RT1–RT5; pad with ASCII space (0x20).",
+    "Right-pad text fields, left-pad numeric fields; validate field ranges and allowed sets.",
+    "Record ordering: RT1 Header → [RT2 Carrier → RT3 Flight Leg(s) → RT4 Segment(s) → RT5 Trailer]* → End.",
+    "serial_number_check_reference MUST equal previous record's record_serial_number.",
+    "record_serial_number MUST equal serial_number_check_reference + 1.",
+    "continuation_end_code='C' requires next record to be RT2; 'E' requires EOF or padding.",
+    "After RT5, pad remaining bytes to 1000-byte block boundary with zeros (0x30 ASCII, 0xF0 EBCDIC).",
+    "RT5 airline_designator should match the RT2 carrier block it's closing (warning if mismatch).",
+    "If record serial number exceeds 999999, follow SSIM Chapter 2 rule — do not silently wrap; raise and apply documented overflow handling.",
+    "Compute extension fields (file_integrity, record_type_summary, processing_summary) after full file parse.",
+    "Validate carrier_count = trailer_count (each RT2 must have RT5).",
+    "Track carrier blocks: RT2 opens, RT5 closes, continuation_end_code controls flow."
+  ],
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2025-11-24",
+      "changes": [
+        "Initial release of Trailer Record (RT5) specification",
+        "Standardized @type to RecordSpecification",
+        "Converted field positions from 1-based to 0-based indexing",
+        "Added sharedVocabulary reference to shared.vocabulary.jsonld",
+        "Added indexing note in conventions section",
+        "Added 1000-byte block structure documentation (1 data record + 4 zero-padding records)"
+      ]
+    }
+  ]
+}

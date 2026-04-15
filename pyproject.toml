@@ -23,7 +23,9 @@ classifiers = [
     "Topic :: Software Development :: Testing",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+    "blake3>=1.0.8",
+]
 
 [project.urls]
 Homepage = "https://k3c.dev"

@@ -1,0 +1,1221 @@
+{
+  "@context": {
+    "@vocab": "https://activeflights.com/specs/v1/",
+    "ssim": "https://activeflights.com/specs/v1/ssim/",
+    "iata": "https://iata.org/",
+    "schema": "https://schema.org/",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "CoreSpec": "https://activeflights.com/specs/v1/CoreSpec",
+    "Field": "https://activeflights.com/specs/v1/Field",
+    "FieldEntity": "https://activeflights.com/specs/v1/FieldEntity",
+    "Validation": "https://activeflights.com/specs/v1/Validation",
+    "SemanticRule": "https://activeflights.com/specs/v1/SemanticRule",
+    "Codec": "https://activeflights.com/specs/v1/Codec",
+    "Relationship": "https://activeflights.com/specs/v1/Relationship",
+    "Extension": "https://activeflights.com/specs/v1/Extension",
+    "id": "@id",
+    "type": "@type",
+    "version": "schema:version",
+    "name": "schema:name",
+    "description": "schema:description",
+    "hasField": "https://activeflights.com/specs/v1/hasField",
+    "hasValidation": "https://activeflights.com/specs/v1/hasValidation",
+    "hasSemanticRule": "https://activeflights.com/specs/v1/hasSemanticRule",
+    "hasExtension": "https://activeflights.com/specs/v1/hasExtension",
+    "relatesTo": "https://activeflights.com/specs/v1/relatesTo",
+    "fieldType": "https://activeflights.com/specs/v1/fieldType",
+    "position": "https://activeflights.com/specs/v1/position",
+    "required": "https://activeflights.com/specs/v1/required",
+    "pattern": "https://activeflights.com/specs/v1/pattern",
+    "allowedValues": "https://activeflights.com/specs/v1/allowedValues",
+    "constantValue": "https://activeflights.com/specs/v1/constantValue",
+    "aiNotes": "https://activeflights.com/specs/v1/aiNotes",
+    "trainingExamples": "https://activeflights.com/specs/v1/trainingExamples",
+    "semantics": "https://activeflights.com/specs/v1/semantics"
+  },
+  "@type": "RecordSpecification",
+  "sharedVocabulary": {
+    "@ref": "./shared.vocabulary.jsonld",
+    "description": "References common field definitions, types, and patterns"
+  },
+  "@id": "ssim.ch7.record_type_2",
+  "name": "Carrier Record (Record Type 2)",
+  "version": "1.0.0",
+  "specType": "core",
+  "description": "The Carrier Record (RT2) defines the period(s) of applicability for the schedules that follow, plus metadata such as creation/issue info, schedule status, and defaults. Each RT2 record represents a carrier's schedule period and is followed by zero or more Flight Leg (RT3) and Segment Data (RT4) records for that carrier. RT2 is a 1000-byte logical block (1 data record + 4 zero-padding records) per SSIM Chapter 7 block alignment requirements.",
+  "aiNotes": "The Carrier Record (RT2) is crucial for understanding schedule scope and context. Think of it as the 'header' for a specific airline's schedule block within a multi-carrier SSIM file.\n\nKey concepts:\n\n1. **Scope Definition**: Defines which dates this carrier's schedules apply to (period_of_validity_from/to)\n2. **Time Mode**: Critical! Specifies if times are Local (L) or UTC (U) - affects all child RT3/RT4 records\n3. **Metadata**: Creation date, title, release date, schedule status (Published/Cancelled)\n4. **Defaults**: In-flight service defaults, electronic ticketing info\n5. **Hierarchical Structure**: RT2 → RT3 (Flight Legs) → RT4 (Segment Data)\n\nCommon workflow:\n- Parse RT1 (Header)\n- Parse RT2 (this record) - establishes carrier context\n- Parse RT3 records (flights for this carrier)\n- Parse RT4 records (segment details for those flights)\n- Repeat for next RT2 (next carrier)\n- Parse RT5 (Trailer)\n\nImportant validations:\n- period_of_validity_from ≤ period_of_validity_to\n- time_mode consistency across related records\n- airline_designator must be valid IATA code\n- schedule_status must be 'P' (Published) or 'C' (Cancelled)\n\nUse cases:\n- Schedule import and validation\n- Period-based schedule filtering\n- Carrier-specific schedule extraction\n- Time zone conversion (based on time_mode)\n- Schedule versioning (via creation_date/release_date)",
+  "iataChapter": "7.5.2",
+  "iataVersion": "2025.35",
+  "recordType": 2,
+  "metadata": {
+    "encoding": {
+      "allowed": [
+        "ASCII",
+        "EBCDIC"
+      ],
+      "ascii": {
+        "blank_hex": "0x20",
+        "zero_hex": "0x30"
+      },
+      "ebcdic": {
+        "blank_hex": "0x40",
+        "zero_hex": "0xF0"
+      }
+    },
+    "statusLegend": {
+      "M": "Mandatory",
+      "C": "Conditional",
+      "O": "Optional"
+    },
+    "conventions": {
+      "positions": "Byte positions are 1-based and inclusive",
+      "padding": "Unless noted, blanks are used to pad unused bytes",
+      "fill_rules": {
+        "blank": "Fill with space characters",
+        "zero": "Fill with numeric zeroes"
+      },
+      "alignment": {
+        "left": "Left-justify content; pad on the right",
+        "right": "Right-justify content; pad on the left"
+      }
+    }
+  },
+  "codec": {
+    "@type": "Codec",
+    "codecType": "fixed_width",
+    "length": 200,
+    "byteOrder": "big-endian",
+    "encoding": "ASCII",
+    "recordTerminator": null,
+    "notes": "All SSIM records are exactly 200 bytes. RT2 follows RT1 and precedes RT3/RT4 records for this carrier."
+  },
+  "fields": [
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#record_type",
+      "name": "record_type",
+      "fieldType": "string",
+      "position": {
+        "start": 0,
+        "end": 0,
+        "length": 1
+      },
+      "required": true,
+      "constantValue": "2",
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "description": "Record type identifier. Always '2' for Carrier records.",
+      "documentation": "This field discriminates RT2 (Carrier) from other record types. Use this byte to route to the appropriate parser when processing SSIM files sequentially.",
+      "aiNotes": "Record type discriminator. Always '2' for Carrier records. Use for parser routing.",
+      "validation": {
+        "type": "constant",
+        "value": "2",
+        "errorMessage": "Carrier record must have record_type = '2'"
+      },
+      "examples": [
+        "2"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#time_mode",
+      "name": "time_mode",
+      "fieldType": "string",
+      "position": {
+        "start": 1,
+        "end": 1,
+        "length": 1
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "allowedValues": [
+        "U",
+        "L"
+      ],
+      "description": "'U' = UTC (Coordinated Universal Time), 'L' = Local Time. This mode applies to ALL date/time fields in this RT2 and its associated RT3/RT4 records.",
+      "documentation": "Critical field! Determines how to interpret ALL timestamps in this carrier's schedule block. If 'L' (Local), times are in the local timezone of each airport. If 'U' (UTC), all times are in UTC. This affects period_of_validity_from/to, creation_date, and all times in child RT3/RT4 records.",
+      "aiNotes": "Time mode for ALL records in this carrier block. CRITICAL for correct time interpretation!\n\nValues:\n- 'U' = UTC: All dates/times are in UTC (Zulu time)\n- 'L' = Local: Dates/times are in local timezone of each airport\n\nImplications:\n- Affects period_of_validity_from/to dates\n- Affects creation_date, release_date\n- Inherited by ALL RT3 (flight leg) times (STD/STA)\n- Inherited by ALL RT4 (segment) times\n\nLocal time mode (L):\n- More intuitive for users ('flight departs at 14:00 local')\n- Requires timezone lookup for each airport\n- Must handle DST transitions carefully\n- Common for published schedules (majority of SSIM filings)\n\nUTC mode (U):\n- Unambiguous, no DST issues\n- Easier for system processing\n- Less intuitive for end users\n- Common for operational and military systems\n\nDST transition handling (clarified in post-2011 editions):\n- When time_mode='L' and a flight's period_of_operation spans a DST change:\n  - The STD/STA times in RT3 remain in LOCAL wall-clock time throughout\n  - The departure_utc_variation and arrival_utc_variation fields change at DST boundaries\n  - Day-of-operation (DoP) may shift when converting Local→UTC around DST transitions\n  - Example: A 23:30 local departure becomes a different UTC date after DST 'spring forward'\n  - Parsers must split schedules at DST boundaries when converting to UTC to avoid DoP loss/duplication\n- When time_mode='U':\n  - No DST considerations — UTC is always unambiguous\n  - DoP in UTC may differ from local DoP (a Monday local flight may be Sunday UTC)\n\nIndustry practice:\n- Most airlines file in Local time mode ('L')\n- OAG and Cirium normalize to both Local and UTC in their databases\n- GDS systems typically store in Local time\n- Operational control systems often prefer UTC\n\nCritical: Never mix time modes within a single RT2 carrier block. All child RT3/RT4 records inherit the RT2 time_mode.",
+      "validation": {
+        "type": "enum",
+        "allowedValues": [
+          "U",
+          "L"
+        ],
+        "errorMessage": "time_mode must be 'U' (UTC) or 'L' (Local)"
+      },
+      "examples": [
+        "U",
+        "L"
+      ],
+      "relatesTo": {
+        "@type": "SemanticRule",
+        "target": "ssim.ch7.record_type_3",
+        "relationship": "determines_time_interpretation_for",
+        "description": "time_mode from RT2 applies to all RT3/RT4 records until next RT2"
+      }
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#airline_designator",
+      "name": "airline_designator",
+      "fieldType": "iata_airline",
+      "position": {
+        "start": 2,
+        "end": 4,
+        "length": 3
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "pattern": "^[A-Z0-9]{2}[A-Z0-9 ]$",
+      "description": "IATA airline designator code. 2-3 alphanumeric characters, left-justified. Two-character codes end with a blank (e.g., 'AA ' for American Airlines, 'QF ' for Qantas).",
+      "documentation": "This is the carrier operating the flights in subsequent RT3/RT4 records. Must be a valid IATA airline designator. Two-letter codes (most common) are left-padded with a space. Three-letter codes fill all 3 bytes.",
+      "aiNotes": "IATA airline code identifying the carrier. Format:\n\n2-char codes (most common):\n- 'AA ' = American Airlines\n- 'DL ' = Delta Air Lines\n- 'QF ' = Qantas\n- 'BA ' = British Airways\n\nNote the trailing space for 2-char codes!\n\n3-char codes (less common):\n- 'UAL' = United Airlines (historical)\n\nValidation:\n- Must be 2 or 3 alphanumeric chars\n- Left-justified, blank-padded to 3 bytes\n- Should exist in IATA airline registry\n- Case-sensitive (uppercase only)\n\nAll RT3/RT4 records following this RT2 belong to this carrier until the next RT2 or RT5.",
+      "validation": {
+        "type": "pattern",
+        "pattern": "^[A-Z0-9]{2}[A-Z0-9 ]$",
+        "errorMessage": "airline_designator must be 2-3 alphanumeric characters, left-justified"
+      },
+      "examples": [
+        "AA ",
+        "DL ",
+        "QF ",
+        "BA ",
+        "UAL"
+      ],
+      "relatesTo": {
+        "@type": "FieldRelationship",
+        "target": "iata.airline",
+        "relationship": "references_airline",
+        "description": "Links to IATA airline registry for full airline metadata"
+      }
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#spare_1",
+      "name": "spare_1",
+      "fieldType": "string",
+      "position": {
+        "start": 5,
+        "end": 9,
+        "length": 5
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "fillRule": "blank",
+      "description": "Reserved field for future use. Must be blank-filled (5 bytes).",
+      "documentation": "Reserved for future SSIM extensions. Always blank in current specification.",
+      "aiNotes": "Reserved/spare field. Always 5 blanks. Skip when parsing.",
+      "validation": {
+        "type": "blank_fill",
+        "length": 5,
+        "errorMessage": "spare_1 must be 5 blank characters"
+      },
+      "examples": [
+        "     "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#season",
+      "name": "season",
+      "fieldType": "string",
+      "position": {
+        "start": 10,
+        "end": 12,
+        "length": 3
+      },
+      "required": false,
+      "status": "O",
+      "alignment": "left",
+      "padding": "blank",
+      "fillRule": "blank",
+      "description": "Season marker (3 bytes) or blank-filled if not used. Identifies which IATA season this carrier block applies to (e.g., 'S24' for Summer 2024, 'W24' for Winter 2024/25).",
+      "documentation": "Optional season identifier following IATA seasonal schedule definitions. IATA defines two seasons per year:\n- Summer: Last Sunday in March to last Saturday in October\n- Winter: Last Sunday in October to last Saturday in March\n\nCommon format: [S|W]YY where S=Summer, W=Winter, YY=year (e.g., 'S24', 'W24').\nIf blank, this carrier block doesn't use explicit season grouping.",
+      "aiNotes": "Optional season code. Examples:\n- 'S24' = Summer 2024 (Mar-Oct 2024)\n- 'W24' = Winter 2024/25 (Oct 2024-Mar 2025)\n- '   ' = No explicit season (blank)\n\nIATA Seasons (defined by IATA Worldwide Airport Slot Guidelines — WASG):\n- Summer: Last Sunday in March to last Saturday before last Sunday in October\n- Winter: Last Sunday in October to last Saturday before last Sunday in March\n\nExact boundary dates shift each year. Consult IATA WASG for the definitive calendar.\n\nSeason date clarifications (post-2011):\n- WASG has been updated multiple times (2013, 2017, 2020, 2022) — season boundary definitions remain stable but slot usage rules around boundaries have been refined\n- During COVID-19 (2020-2022), IATA issued temporary slot waiver provisions affecting how carriers filed schedules within seasons, but the season field format itself was unaffected\n- Airlines filing replacement schedules mid-season should use the SAME season code — the season identifies the IATA scheduling period, not the filing date\n\nUsage:\n- Airlines often publish separate Summer/Winter schedules\n- Enables multi-season files (RT1 number_of_seasons = '2')\n- Blank for carriers not using seasonal grouping\n- Must match season count declared in RT1 if used\n- Some consolidator files omit season codes even when filing seasonal data",
+      "validation": {
+        "type": "length",
+        "length": 3,
+        "errorMessage": "season must be exactly 3 characters (or blank-filled)"
+      },
+      "examples": [
+        "S24",
+        "W24",
+        "S25",
+        "   "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#spare_2",
+      "name": "spare_2",
+      "fieldType": "string",
+      "position": {
+        "start": 13,
+        "end": 13,
+        "length": 1
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "fillRule": "blank",
+      "description": "Reserved field for future use. Must be blank-filled (1 byte).",
+      "documentation": "Reserved for future SSIM extensions. Always blank in current specification.",
+      "aiNotes": "Reserved/spare field. Always 1 blank. Skip when parsing.",
+      "validation": {
+        "type": "blank_fill",
+        "length": 1,
+        "errorMessage": "spare_2 must be 1 blank character"
+      },
+      "examples": [
+        " "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#period_of_validity_from",
+      "name": "period_of_validity_from",
+      "fieldType": "ssim_date",
+      "position": {
+        "start": 14,
+        "end": 20,
+        "length": 7
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "format": {
+        "dateFormat": "DDMMMYY",
+        "example": "07DEC21"
+      },
+      "description": "Start date of the carrier schedule validity period. Format: DDMMMYY (e.g., '07DEC21' = December 7, 2021). Interpreted according to time_mode (UTC or Local).",
+      "documentation": "Defines the start of the schedule validity period. All RT3 (flight leg) records following this RT2 should have operation dates within this period. Format is DDMMMYY where DD=day (01-31), MMM=3-letter month (JAN/FEB/.../DEC), YY=2-digit year.\n\nIMPORTANT: This date is interpreted according to time_mode:\n- If time_mode='L': Date is in local time\n- If time_mode='U': Date is in UTC\n\nMust be ≤ period_of_validity_to.",
+      "aiNotes": "Schedule start date. Format: DDMMMYY\n\nExamples:\n- '01JAN24' = January 1, 2024\n- '15MAR25' = March 15, 2025\n- '31DEC24' = December 31, 2024\n\nMonth codes (3-letter):\nJAN, FEB, MAR, APR, MAY, JUN, JUL, AUG, SEP, OCT, NOV, DEC\n\nParsing:\n- Extract DD (positions 1-2): day\n- Extract MMM (positions 3-5): month code\n- Extract YY (positions 6-7): year (00-99)\n\nYear interpretation (Y2K):\n- 00-49 → 2000-2049\n- 50-99 → 1950-1999\n\nValidation:\n- Must be valid calendar date\n- Must be ≤ period_of_validity_to\n- DD must be 01-31\n- MMM must be valid month code\n- Respect time_mode for interpretation",
+      "validation": {
+        "type": "ssim_date",
+        "format": "DDMMMYY",
+        "errorMessage": "period_of_validity_from must be valid DDMMMYY date"
+      },
+      "examples": [
+        "07DEC21",
+        "01JAN24",
+        "15MAR25",
+        "31DEC24"
+      ],
+      "relatesTo": {
+        "@type": "SemanticRule",
+        "target": "ssim.ch7.record_type_2#period_of_validity_to",
+        "relationship": "must_be_less_than_or_equal_to",
+        "description": "period_of_validity_from must be ≤ period_of_validity_to"
+      }
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#period_of_validity_to",
+      "name": "period_of_validity_to",
+      "fieldType": "ssim_date",
+      "position": {
+        "start": 21,
+        "end": 27,
+        "length": 7
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "format": {
+        "dateFormat": "DDMMMYY",
+        "example": "03MAR22"
+      },
+      "description": "End date of the carrier schedule validity period. Format: DDMMMYY (e.g., '03MAR22' = March 3, 2022). Interpreted according to time_mode (UTC or Local).",
+      "documentation": "Defines the end of the schedule validity period. All RT3 (flight leg) records following this RT2 should have operation dates within this period. Format is DDMMMYY.\n\nIMPORTANT: This date is interpreted according to time_mode:\n- If time_mode='L': Date is in local time\n- If time_mode='U': Date is in UTC\n\nMust be ≥ period_of_validity_from.",
+      "aiNotes": "Schedule end date. Format: DDMMMYY (same as period_of_validity_from).\n\nDefines the inclusive end date of schedule validity.\n\nCommon validity periods:\n- Seasonal: 6 months (Summer: Mar-Oct, Winter: Oct-Mar)\n- Monthly: ~30 days\n- Weekly: 7 days\n- Custom: Variable based on carrier needs\n\nValidation:\n- Must be ≥ period_of_validity_from\n- Must be valid calendar date\n- Typical range: 7 days to 1 year from start date",
+      "validation": {
+        "type": "ssim_date",
+        "format": "DDMMMYY",
+        "errorMessage": "period_of_validity_to must be valid DDMMMYY date"
+      },
+      "examples": [
+        "03MAR22",
+        "31DEC24",
+        "30JUN25",
+        "28FEB25"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#creation_date",
+      "name": "creation_date",
+      "fieldType": "ssim_date",
+      "position": {
+        "start": 28,
+        "end": 34,
+        "length": 7
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "format": {
+        "dateFormat": "DDMMMYY",
+        "example": "03DEC21"
+      },
+      "description": "Dataset creation date. Format: DDMMMYY. The date when this schedule data was generated/created by the carrier.",
+      "documentation": "Timestamp indicating when this schedule dataset was created. Useful for tracking schedule versions and understanding data freshness. Combined with creation_time (bytes 191-194) gives full timestamp. Interpreted according to time_mode.",
+      "aiNotes": "When this schedule was created/generated. Format: DDMMMYY\n\nUse cases:\n- Data freshness tracking\n- Schedule versioning\n- Audit trails\n- Determining which schedule is newer\n\nTypically:\n- creation_date ≤ release_date (created before released)\n- creation_date ≤ period_of_validity_from (created before becomes valid)\n- But not always! Schedules can be created/updated after they start\n\nCombine with creation_time (bytes 191-194) for full timestamp.",
+      "validation": {
+        "type": "ssim_date",
+        "format": "DDMMMYY",
+        "errorMessage": "creation_date must be valid DDMMMYY date"
+      },
+      "examples": [
+        "03DEC21",
+        "15JAN24",
+        "01FEB25"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#title_of_data",
+      "name": "title_of_data",
+      "fieldType": "string",
+      "position": {
+        "start": 35,
+        "end": 63,
+        "length": 29
+      },
+      "required": false,
+      "status": "O",
+      "alignment": "left",
+      "padding": "blank",
+      "description": "Free-format text field for dataset title or description. Left-justified, blank-padded. Optional.",
+      "documentation": "Descriptive title for this schedule dataset. Free-form text field (29 characters). Common uses: carrier name, schedule type, generation system identifier. If unused, blank-filled.",
+      "aiNotes": "Optional descriptive title. Max 29 chars.\n\nCommon patterns:\n- 'Created by Sabre Airflite' (scheduling system)\n- 'Qantas Summer Schedule 2024'\n- 'Delta Airlines Winter Update'\n- Carrier name or scheduling system ID\n\nLeft-justified, blank-padded if shorter than 29 chars.\nBlank-filled if not used.\n\nHelpful for:\n- Identifying schedule source\n- Debugging (which system generated this?)\n- Human-readable context",
+      "validation": {
+        "type": "length",
+        "max": 29,
+        "errorMessage": "title_of_data must be ≤ 29 characters"
+      },
+      "examples": [
+        "Created by Sabre Airflite",
+        "Qantas Summer Schedule 2024",
+        "                             "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#release_date",
+      "name": "release_date",
+      "fieldType": "ssim_date",
+      "position": {
+        "start": 64,
+        "end": 70,
+        "length": 7
+      },
+      "required": false,
+      "status": "O",
+      "alignment": "left",
+      "padding": "blank",
+      "format": {
+        "dateFormat": "DDMMMYY",
+        "example": "15DEC21"
+      },
+      "description": "Release date (when schedule becomes available for booking/sale). Format: DDMMMYY. Optional - blank-filled if not used.",
+      "documentation": "The date when this schedule is released for public booking/sale. Often called 'on-sale date'. If blank, no specific release date is specified. Typically: creation_date ≤ release_date ≤ period_of_validity_from.",
+      "aiNotes": "Schedule release/on-sale date. Format: DDMMMYY (or blank)\n\nCommon timeline:\n1. creation_date: When carrier generates schedule\n2. release_date: When schedule opens for booking (this field)\n3. period_of_validity_from: When flights actually operate\n\nExample timeline:\n- Created: 01NOV24 (creation_date)\n- Released for sale: 15NOV24 (release_date) ← This field\n- Valid from: 01JAN25 (period_of_validity_from)\n- Valid to: 31MAR25 (period_of_validity_to)\n\nBlank if:\n- No specific release date\n- Schedule already on sale\n- Release date not applicable\n\nUse cases:\n- Booking system scheduling\n- Fare loading timelines\n- Marketing campaigns\n- Schedule publication planning",
+      "validation": {
+        "type": "ssim_date_or_blank",
+        "format": "DDMMMYY",
+        "errorMessage": "release_date must be valid DDMMMYY date or blank"
+      },
+      "examples": [
+        "15DEC21",
+        "01JAN24",
+        "       "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#schedule_status",
+      "name": "schedule_status",
+      "fieldType": "string",
+      "position": {
+        "start": 71,
+        "end": 71,
+        "length": 1
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "left",
+      "padding": "blank",
+      "allowedValues": [
+        "P",
+        "C"
+      ],
+      "description": "Schedule status code. 'P' = Published (active schedule), 'C' = Cancelled (schedule withdrawn).",
+      "documentation": "Indicates whether this schedule is published (active) or cancelled (withdrawn). Critical for determining which schedules are currently valid.\n\n'P' (Published): This is an active schedule. RT3/RT4 records should be processed and loaded.\n'C' (Cancelled): This schedule has been withdrawn. RT3/RT4 records should be removed or marked inactive.",
+      "aiNotes": "Schedule status flag. CRITICAL for schedule processing!\n\nValues:\n- 'P' = Published/Active\n  - Schedule is current and valid\n  - Process all RT3/RT4 records\n  - Load into booking systems\n  - Show to customers\n\n- 'C' = Cancelled/Withdrawn\n  - Schedule has been cancelled\n  - Remove existing RT3/RT4 records\n  - Do NOT show to customers\n  - Used to retract previously published schedules\n\nCommon scenarios:\n\nScenario 1 - Initial publish:\n- Receive RT2 with status='P'\n- Load all RT3 flight legs\n\nScenario 2 - Schedule update:\n- Receive new RT2 with status='P'\n- Replace old flights with new ones\n\nScenario 3 - Cancellation:\n- Receive RT2 with status='C'\n- Remove all associated flights\n- Close for booking\n\nAlways check this field before processing RT3/RT4 records!",
+      "validation": {
+        "type": "enum",
+        "allowedValues": [
+          "P",
+          "C"
+        ],
+        "errorMessage": "schedule_status must be 'P' (Published) or 'C' (Cancelled)"
+      },
+      "examples": [
+        "P",
+        "C"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#creator_reference",
+      "name": "creator_reference",
+      "fieldType": "string",
+      "position": {
+        "start": 72,
+        "end": 106,
+        "length": 35
+      },
+      "required": false,
+      "status": "O",
+      "alignment": "left",
+      "padding": "blank",
+      "description": "Free-format reference field for creator information. Left-justified, blank-padded. Optional (35 characters).",
+      "documentation": "Free-text field for creator/generator system information or reference codes. Common uses: scheduling system name, version, operator contact, internal reference codes. Blank-filled if unused.",
+      "aiNotes": "Optional creator reference. Max 35 chars.\n\nCommon uses:\n- System identifier: 'Created by Sabre AirFlite'\n- Version info: 'SchedGen v3.2.1'\n- Contact info: 'schedules@airline.com'\n- Internal ref: 'BATCH_2024_W01_v2'\n- Blank if not used\n\nLeft-justified, blank-padded.\n\nUseful for:\n- Tracking schedule source\n- Support/debugging\n- System auditing\n- Vendor identification",
+      "validation": {
+        "type": "length",
+        "max": 35,
+        "errorMessage": "creator_reference must be ≤ 35 characters"
+      },
+      "examples": [
+        "Created by Sabre AirFlite",
+        "SchedGen v3.2.1",
+        "                                   "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#duplicate_airline_designator_marker",
+      "name": "duplicate_airline_designator_marker",
+      "fieldType": "string",
+      "position": {
+        "start": 107,
+        "end": 107,
+        "length": 1
+      },
+      "required": false,
+      "status": "C",
+      "alignment": "left",
+      "padding": "blank",
+      "fillRule": "blank",
+      "description": "Conditional field. Blank if not used. Used to distinguish multiple schedule blocks for the same airline within one file (rare scenario).",
+      "documentation": "Conditional marker used when a single file contains multiple RT2 blocks for the same airline_designator (rare). Helps differentiate between different schedule sets for the same carrier. Usually blank. When used, contains a unique marker character.",
+      "aiNotes": "Conditional duplicate marker. Normally blank.\n\nRare scenario: Same airline appears multiple times in one file.\n\nExample: United Airlines publishes:\n- Domestic schedules (RT2 with airline='UAL', marker=' ')\n- International schedules (RT2 with airline='UAL', marker='I')\n\nMost files: Always blank (single schedule per carrier)\n\nOnly used when:\n- Carrier has multiple schedule blocks\n- Different regions/networks\n- Separate schedule types\n\nBlank = default/primary schedule for this carrier",
+      "validation": {
+        "type": "length",
+        "length": 1,
+        "errorMessage": "duplicate_airline_designator_marker must be 1 character"
+      },
+      "examples": [
+        " ",
+        "I",
+        "D"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#general_information",
+      "name": "general_information",
+      "fieldType": "string",
+      "position": {
+        "start": 108,
+        "end": 168,
+        "length": 61
+      },
+      "required": false,
+      "status": "O",
+      "alignment": "left",
+      "padding": "blank",
+      "description": "Free-format general information field. Left-justified, blank-padded. Optional (61 characters).",
+      "documentation": "Large free-text field for any additional information the carrier wants to include. Common uses: notes, warnings, change descriptions, contact info, special instructions. Blank-filled if unused.",
+      "aiNotes": "Optional general info field. Max 61 chars.\n\nFree-form text for any purpose:\n- Schedule notes\n- Change descriptions\n- Warnings/alerts\n- Contact information\n- Special instructions\n- Carrier-specific metadata\n\nLeft-justified, blank-padded.\nBlank if not used.\n\nExample uses:\n- 'Winter schedule with holiday additions'\n- 'Contact schedules@airline.com for questions'\n- 'Updated for new aircraft delivery'\n- 'Temporary schedule - COVID-19 response'",
+      "validation": {
+        "type": "length",
+        "max": 61,
+        "errorMessage": "general_information must be ≤ 61 characters"
+      },
+      "examples": [
+        "Winter schedule with holiday additions",
+        "Contact schedules@airline.com",
+        "                                                             "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#in_flight_service_info_defaults",
+      "name": "in_flight_service_info_defaults",
+      "fieldType": "string",
+      "position": {
+        "start": 169,
+        "end": 187,
+        "length": 19
+      },
+      "required": false,
+      "status": "O",
+      "alignment": "right",
+      "padding": "blank",
+      "description": "Default in-flight service information per SSIM Chapter 2 DEI format (19 characters). Right-justified, blank-padded. Note: DEI 503 not required. Optional.",
+      "documentation": "Default in-flight service codes following SSIM Chapter 2 Data Element Index (DEI) format. These defaults apply to all flights in this carrier block unless overridden in RT4 records. Encodes services like meals, entertainment, cabin class amenities. Right-justified, blank-padded if shorter than 19 characters.",
+      "aiNotes": "Default in-flight services. Format: DEI (Data Element Index) codes.\n\n19-character field containing service codes:\n- Meal service codes\n- Entertainment options\n- Cabin amenities\n- Special services\n\nPer SSIM Chapter 2 specification.\n\nRight-justified (unusual for text field!).\n\nThese are DEFAULTS:\n- Applied to ALL RT3 flight legs in this carrier block\n- Can be overridden in RT4 segment records\n- Blank if no defaults specified\n\nCommon codes (examples):\n- 'M' = Meal service\n- 'S' = Snack\n- 'B' = Breakfast\n- 'L' = Lunch\n- 'D' = Dinner\n- 'V' = Video/Entertainment\n\nNote: DEI 503 (free baggage allowance) not required in this field.\n\nBlank = No default services specified.",
+      "validation": {
+        "type": "length",
+        "max": 19,
+        "errorMessage": "in_flight_service_info_defaults must be ≤ 19 characters"
+      },
+      "examples": [
+        "               MLBD",
+        "                   ",
+        "               MSVB"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#electronic_ticketing_info",
+      "name": "electronic_ticketing_info",
+      "fieldType": "string",
+      "position": {
+        "start": 188,
+        "end": 189,
+        "length": 2
+      },
+      "required": false,
+      "status": "O",
+      "alignment": "left",
+      "padding": "blank",
+      "allowedValues": [
+        "EN",
+        "ET",
+        "  "
+      ],
+      "description": "Electronic ticketing indicator. 'EN' = Not ETC candidates, 'ET' = ETC candidates. Optional (blank if not used).",
+      "documentation": "Indicates whether flights in this carrier block are candidates for Electronic Ticketing (ET). Historical field - most flights today use electronic tickets.\n\n'ET' = Electronic Ticketing Candidates (flights support e-tickets)\n'EN' = Electronic Ticketing NOT supported (paper tickets only)\nBlank = Not specified",
+      "aiNotes": "Electronic ticketing support indicator.\n\nValues:\n- 'ET' = E-Ticket supported\n  - Flights can use electronic tickets\n  - Modern standard (post-2008)\n  - Most common today\n\n- 'EN' = E-Ticket NOT supported\n  - Paper tickets required\n  - Rare in modern schedules\n  - Legacy/historical\n\n- '  ' (blank) = Not specified\n  - Default if field unused\n\nHistorical context:\n- Pre-2000s: Paper tickets standard\n- 2000s: Gradual e-ticket adoption\n- 2008: IATA mandate for e-tickets\n- Today: Nearly all flights are 'ET'\n\nMostly relevant for:\n- Historical schedule data\n- Legacy systems\n- Regulatory compliance\n\nModern schedules: Usually 'ET' or blank.",
+      "validation": {
+        "type": "enum_or_blank",
+        "allowedValues": [
+          "EN",
+          "ET",
+          "  "
+        ],
+        "errorMessage": "electronic_ticketing_info must be 'EN', 'ET', or blank"
+      },
+      "examples": [
+        "ET",
+        "EN",
+        "  "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#creation_time",
+      "name": "creation_time",
+      "fieldType": "time",
+      "position": {
+        "start": 190,
+        "end": 193,
+        "length": 4
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "left",
+      "padding": "zero",
+      "format": {
+        "timeFormat": "HHMM",
+        "example": "1346"
+      },
+      "pattern": "^(?:[01][0-9]|2[0-3])[0-5][0-9]$",
+      "description": "Time of dataset creation in HHMM format (24-hour). Hours: 00-23, Minutes: 00-59. Complements creation_date to form complete timestamp.",
+      "documentation": "Creation time in 24-hour format (HHMM). Combined with creation_date (bytes 29-35) provides full creation timestamp. Interpreted according to time_mode (UTC or Local).",
+      "aiNotes": "Creation time. Format: HHMM (24-hour)\n\nExamples:\n- '0830' = 08:30 (8:30 AM)\n- '1346' = 13:46 (1:46 PM)\n- '2100' = 21:00 (9:00 PM)\n- '0000' = 00:00 (midnight)\n- '2359' = 23:59 (11:59 PM)\n\nValidation:\n- HH: 00-23 (24-hour format)\n- MM: 00-59 (minutes)\n\nCombined timestamp:\ncreation_date + creation_time = Full creation timestamp\n\nExample:\n- creation_date: '03DEC21'\n- creation_time: '2100'\n- Full timestamp: December 3, 2021 at 21:00\n\nInterpreted per time_mode:\n- time_mode='L': Local time\n- time_mode='U': UTC\n\nUse for:\n- Exact schedule generation time\n- Version comparison\n- Audit trails",
+      "validation": {
+        "type": "pattern",
+        "pattern": "^(?:[01][0-9]|2[0-3])[0-5][0-9]$",
+        "errorMessage": "creation_time must be valid HHMM (00:00-23:59)"
+      },
+      "examples": [
+        "0830",
+        "1346",
+        "2100",
+        "0000",
+        "2359"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_2#record_serial_number",
+      "name": "record_serial_number",
+      "fieldType": "integer",
+      "position": {
+        "start": 194,
+        "end": 199,
+        "length": 6
+      },
+      "required": true,
+      "status": "M",
+      "alignment": "right",
+      "padding": "zero",
+      "format": {
+        "zeroPad": 6,
+        "radix": 10
+      },
+      "description": "Record serial number within the file. Sequential counter starting from RT1 (000001). For RT2, typically 000002 or higher. Zero-filled, right-justified.",
+      "documentation": "Sequential record counter within the SSIM file. Increments from RT1 (which is always 000001). Each record in the file gets a unique sequential number. Used for record ordering and integrity checking.\n\nRT1: 000001\nRT2: 000002 (or higher if multiple RT2s)\nRT3: 000003, 000004, ...\nRT5: Final number\n\nIf file exceeds 999,999 records, wraps to 000002 (skipping 000001 reserved for RT1).",
+      "aiNotes": "Sequential record number. Format: 6-digit zero-padded.\n\nTypical sequence:\n- RT1: 000001 (header, always first)\n- RT2: 000002 (first carrier) ← This record type\n- RT3: 000003 (first flight leg)\n- RT3: 000004 (second flight leg)\n- RT4: 000005 (segment data)\n- RT2: 000006 (second carrier, if multi-carrier file)\n- ...\n- RT5: 999999 (trailer, last record)\n\nIncremental counter:\n- Starts at 000001 (RT1)\n- Each record increments by 1\n- Sequential throughout file\n\nValidation:\n- Should increment sequentially\n- No gaps (unless records deleted)\n- Max: 999999\n- Overflow: Wraps to 000002 (not 000001!)\n\nUse cases:\n- File integrity checking\n- Record navigation\n- Error reporting (\"Error in record 000042\")\n- File metrics (total records = final serial number)",
+      "validation": {
+        "type": "range",
+        "min": 2,
+        "max": 999999,
+        "errorMessage": "RT2 record_serial_number must be 2-999999"
+      },
+      "examples": [
+        "000002",
+        "000010",
+        "000100",
+        "001234",
+        "999999"
+      ]
+    }
+  ],
+  "validations": [
+    {
+      "@type": "Validation",
+      "@id": "ssim.ch7.record_type_2#validation_fixed_length",
+      "name": "fixed_length",
+      "validationType": "length",
+      "rule": {
+        "equals": 200
+      },
+      "errorMessage": "Carrier record must be exactly 200 bytes",
+      "severity": "error"
+    },
+    {
+      "@type": "Validation",
+      "@id": "ssim.ch7.record_type_2#validation_required_constants",
+      "name": "required_constants",
+      "validationType": "constant_fields",
+      "fields": [
+        {
+          "field": "record_type",
+          "value": "2"
+        }
+      ],
+      "errorMessage": "Carrier record must have record_type = '2'",
+      "severity": "error"
+    },
+    {
+      "@type": "Validation",
+      "@id": "ssim.ch7.record_type_2#validation_field_lengths",
+      "name": "field_lengths",
+      "validationType": "field_length",
+      "fields": [
+        {
+          "field": "airline_designator",
+          "equals": 3
+        },
+        {
+          "field": "spare_1",
+          "equals": 5
+        },
+        {
+          "field": "season",
+          "equals": 3
+        },
+        {
+          "field": "spare_2",
+          "equals": 1
+        },
+        {
+          "field": "period_of_validity_from",
+          "equals": 7
+        },
+        {
+          "field": "period_of_validity_to",
+          "equals": 7
+        },
+        {
+          "field": "creation_date",
+          "equals": 7
+        },
+        {
+          "field": "title_of_data",
+          "equals": 29
+        },
+        {
+          "field": "release_date",
+          "equals": 7
+        },
+        {
+          "field": "schedule_status",
+          "equals": 1
+        },
+        {
+          "field": "creator_reference",
+          "equals": 35
+        },
+        {
+          "field": "duplicate_airline_designator_marker",
+          "equals": 1
+        },
+        {
+          "field": "general_information",
+          "equals": 61
+        },
+        {
+          "field": "in_flight_service_info_defaults",
+          "equals": 19
+        },
+        {
+          "field": "electronic_ticketing_info",
+          "equals": 2
+        },
+        {
+          "field": "creation_time",
+          "equals": 4
+        },
+        {
+          "field": "record_serial_number",
+          "equals": 6
+        }
+      ],
+      "errorMessage": "Field lengths do not match SSIM specification",
+      "severity": "error"
+    },
+    {
+      "@type": "Validation",
+      "@id": "ssim.ch7.record_type_2#validation_padding_rules",
+      "name": "padding_rules",
+      "validationType": "padding",
+      "fields": [
+        {
+          "field": "spare_1",
+          "fill": "blank"
+        },
+        {
+          "field": "spare_2",
+          "fill": "blank"
+        }
+      ],
+      "errorMessage": "Spare fields must be blank-filled",
+      "severity": "warning"
+    }
+  ],
+  "semanticRules": [
+    {
+      "@type": "SemanticRule",
+      "@id": "ssim.ch7.record_type_2#sr_validity_date_order",
+      "name": "validity_date_order",
+      "description": "period_of_validity_from must be ≤ period_of_validity_to.",
+      "checkType": "external",
+      "validationLogic": "Compare period_of_validity_from and period_of_validity_to dates. Start date must be on or before end date.",
+      "errorMessage": "period_of_validity_from must be ≤ period_of_validity_to",
+      "severity": "error"
+    },
+    {
+      "@type": "SemanticRule",
+      "@id": "ssim.ch7.record_type_2#sr_time_mode_consistency",
+      "name": "time_mode_consistency",
+      "description": "Dates interpreted per time_mode (U/L) must not cause DoP loss/duplication when converted. Schedules spanning DST transitions must be split at the DST boundary to preserve day-of-operation accuracy.",
+      "checkType": "external",
+      "validationLogic": "When converting between UTC and Local time:\n1. Identify DST transition dates within period_of_validity_from/to for each airport\n2. For flights whose period_of_operation spans a DST change:\n   a. Verify departure_utc_variation and arrival_utc_variation are correct on both sides of the DST boundary\n   b. If time_mode='L', check that Local→UTC conversion does not shift the day-of-operation (e.g., a Monday local departure becoming Sunday UTC)\n   c. If DoP shift occurs, the schedule should be split into two RT3 records at the DST boundary with adjusted UTC variations\n3. Flag any RT3 record where UTC conversion would result in DoP loss (a day disappearing) or DoP duplication (a day appearing twice)",
+      "errorMessage": "Time mode conversion causes day-of-operation inconsistencies at DST boundaries",
+      "severity": "warning"
+    },
+    {
+      "@type": "SemanticRule",
+      "@id": "ssim.ch7.record_type_2#sr_record_serial_overflow",
+      "name": "record_serial_overflow",
+      "description": "Record Serial Numbers are 6-digit numeric fields (000001-999999). If the record count exceeds 999999, numbering must restart at 000002 because 000001 is reserved for the Header Record (RT1).",
+      "checkType": "external",
+      "validationLogic": "If file has > 999,999 records, verify numbering wraps to 000002 (not 000001)",
+      "errorMessage": "Record serial number overflow handling is incorrect",
+      "severity": "error"
+    }
+  ],
+  "relationships": [
+    {
+      "@type": "Relationship",
+      "source": "ssim.ch7.record_type_2",
+      "target": "ssim.ch7.record_type_1",
+      "relationship": "follows",
+      "cardinality": "N:1",
+      "description": "RT2 follows RT1 (Header). Multiple carriers can follow one header.",
+      "navigable": true
+    },
+    {
+      "@type": "Relationship",
+      "source": "ssim.ch7.record_type_2",
+      "target": "ssim.ch7.record_type_3",
+      "relationship": "contains",
+      "cardinality": "1:N",
+      "description": "RT2 is followed by zero or more RT3 (Flight Leg) records for this carrier",
+      "navigable": true
+    },
+    {
+      "@type": "Relationship",
+      "source": "ssim.ch7.record_type_2",
+      "target": "iata.airline",
+      "relationship": "references_airline",
+      "via": "airline_designator",
+      "cardinality": "N:1",
+      "description": "airline_designator links to IATA airline registry",
+      "navigable": true
+    }
+  ],
+  "extensions": [
+    {
+      "@type": "Extension",
+      "@id": "ssim.ch7.record_type_2#ext_flight_legs",
+      "name": "flight_legs",
+      "description": "Collection of all Flight Leg (RT3) records associated with this carrier. Lazily loaded by joining RT3 records that match the carrier designator. In SSIM structure: RT2 → RT3(s) → RT4(s). This enables navigation from carrier level to individual flight legs.",
+      "extensionType": "array",
+      "items": {
+        "$ref": "ssim.ch7.record_type_3"
+      },
+      "loadingStrategy": "lazy",
+      "joinCondition": [
+        "rt2.airline_designator = rt3.airline_designator",
+        "rt3.record_serial_number > rt2.record_serial_number",
+        "rt3.record_serial_number < next_rt2_or_rt5.record_serial_number"
+      ],
+      "ordering": "ORDER BY rt3.departure_station, rt3.aircraft_std, rt3.leg_sequence_number",
+      "notes": [
+        "This field is NOT encoded in the 200-byte fixed-width RT2 record",
+        "It is populated by parsing all RT3 records until next RT2 or RT5",
+        "Enables hierarchical navigation: RT2 → RT3 → RT4",
+        "Empty array if carrier has no flight legs in this period",
+        "Useful for carrier-level schedule analysis"
+      ],
+      "exampleValue": [
+        {
+          "flight_number": "0001",
+          "departure_station": "SYD",
+          "arrival_station": "LAX",
+          "segments": []
+        },
+        {
+          "flight_number": "0002",
+          "departure_station": "MEL",
+          "arrival_station": "SIN",
+          "segments": []
+        }
+      ]
+    },
+    {
+      "@type": "Extension",
+      "@id": "ssim.ch7.record_type_2#ext_airline_metadata",
+      "name": "airline_metadata",
+      "description": "Enriched airline metadata from external sources (not in SSIM). Lazily loaded from airline reference data to provide full airline details.",
+      "extensionType": "object",
+      "loadingStrategy": "lazy",
+      "dataSource": "airline_reference_table",
+      "properties": {
+        "iata_code": {
+          "type": "string",
+          "description": "2-letter IATA code (e.g., 'QF')"
+        },
+        "icao_code": {
+          "type": "string",
+          "description": "3-letter ICAO code (e.g., 'QFA')"
+        },
+        "airline_name": {
+          "type": "string",
+          "description": "Full airline name (e.g., 'Qantas Airways')"
+        },
+        "country_code": {
+          "type": "string",
+          "description": "ISO 3166-1 alpha-2 country code (e.g., 'AU')"
+        },
+        "alliance": {
+          "type": "string",
+          "enum": [
+            "oneworld",
+            "Star Alliance",
+            "SkyTeam",
+            null
+          ],
+          "description": "Airline alliance membership"
+        },
+        "is_low_cost_carrier": {
+          "type": "boolean",
+          "description": "True if classified as LCC"
+        },
+        "headquarters_city": {
+          "type": "string",
+          "description": "City where airline is headquartered"
+        }
+      },
+      "notes": [
+        "Joined from external airline reference data",
+        "Not part of SSIM specification",
+        "Enables richer API responses without additional lookups",
+        "Can be null if airline not found in reference data"
+      ],
+      "exampleValue": {
+        "iata_code": "QF",
+        "icao_code": "QFA",
+        "airline_name": "Qantas Airways",
+        "country_code": "AU",
+        "alliance": "oneworld",
+        "is_low_cost_carrier": false,
+        "headquarters_city": "Sydney"
+      }
+    },
+    {
+      "@type": "Extension",
+      "@id": "ssim.ch7.record_type_2#ext_schedule_statistics",
+      "name": "schedule_statistics",
+      "description": "Computed statistics about this carrier's schedule. Calculated by aggregating all RT3 records for this carrier.",
+      "extensionType": "object",
+      "loadingStrategy": "computed",
+      "properties": {
+        "total_flight_legs": {
+          "type": "integer",
+          "description": "Total number of flight legs for this carrier"
+        },
+        "unique_routes": {
+          "type": "integer",
+          "description": "Number of unique origin-destination pairs"
+        },
+        "total_frequencies": {
+          "type": "integer",
+          "description": "Total weekly departures (sum of all legs)"
+        },
+        "cities_served": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of unique IATA city codes served"
+        },
+        "countries_served": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of unique ISO country codes served"
+        },
+        "aircraft_types_used": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of unique aircraft types in this schedule"
+        }
+      },
+      "notes": [
+        "Computed by aggregating all RT3 records",
+        "Useful for schedule analysis and capacity planning",
+        "Can be cached/materialized for performance",
+        "Updates when carrier schedule changes"
+      ],
+      "exampleValue": {
+        "total_flight_legs": 1234,
+        "unique_routes": 456,
+        "total_frequencies": 5678,
+        "cities_served": [
+          "SYD",
+          "MEL",
+          "BNE",
+          "LAX",
+          "LHR"
+        ],
+        "countries_served": [
+          "AU",
+          "US",
+          "GB",
+          "SG"
+        ],
+        "aircraft_types_used": [
+          "73H",
+          "7M8",
+          "789",
+          "388"
+        ]
+      }
+    }
+  ],
+  "trainingExamples": [
+    {
+      "@type": "TrainingExample",
+      "name": "Standard Carrier Record",
+      "input": "2UXX  0008    07DEC2103MAR2203DEC21Created by Sabre Airflite           PCreated by Sabre AirFlite                                                                                           EN2100000002",
+      "output": {
+        "record_type": "2",
+        "time_mode": "U",
+        "airline_designator": "XX ",
+        "season": "000",
+        "period_of_validity_from": "2021-12-07",
+        "period_of_validity_to": "2022-03-03",
+        "creation_date": "2021-12-03",
+        "title_of_data": "Created by Sabre Airflite",
+        "release_date": null,
+        "schedule_status": "P",
+        "creator_reference": "Created by Sabre AirFlite",
+        "general_information": "",
+        "in_flight_service_info_defaults": "",
+        "electronic_ticketing_info": "EN",
+        "creation_time": "21:00",
+        "record_serial_number": 2
+      },
+      "explanation": "Standard carrier record for airline XX. Time mode is UTC ('U'). Schedule valid from Dec 7, 2021 to Mar 3, 2022. Created Dec 3, 2021 at 21:00 UTC. Status is Published ('P'). Electronic ticketing NOT supported ('EN'). This is record #2 in the file (first RT2 after RT1).",
+      "encoding": "ASCII"
+    },
+    {
+      "@type": "TrainingExample",
+      "name": "Qantas Local Time Schedule",
+      "input": "2LQF S24     01JAN2431MAR2415DEC23Qantas Summer 2024 Schedule  01JAN24PQantas Schedule Planning Team                                                                                      ET1430000015",
+      "output": {
+        "record_type": "2",
+        "time_mode": "L",
+        "airline_designator": "QF ",
+        "season": "S24",
+        "period_of_validity_from": "2024-01-01",
+        "period_of_validity_to": "2024-03-31",
+        "creation_date": "2023-12-15",
+        "title_of_data": "Qantas Summer 2024 Schedule",
+        "release_date": "2024-01-01",
+        "schedule_status": "P",
+        "creator_reference": "Qantas Schedule Planning Team",
+        "general_information": "",
+        "in_flight_service_info_defaults": "",
+        "electronic_ticketing_info": "ET",
+        "creation_time": "14:30",
+        "record_serial_number": 15
+      },
+      "explanation": "Qantas Airways (QF) carrier record. Local time mode ('L'). Summer 2024 season ('S24'). Valid Jan 1 - Mar 31, 2024. Created Dec 15, 2023 at 14:30 local time. Released for sale Jan 1, 2024. Published status. Electronic ticketing supported ('ET'). Record #15 in file.",
+      "encoding": "ASCII"
+    },
+    {
+      "@type": "TrainingExample",
+      "name": "Cancelled Schedule",
+      "input": "2LAA      01FEB2428FEB2401FEB24Schedule Cancelled - COVID-19        CCancelled due to operational constraints                                                                            ET0900000042",
+      "output": {
+        "record_type": "2",
+        "time_mode": "L",
+        "airline_designator": "AA ",
+        "season": "",
+        "period_of_validity_from": "2024-02-01",
+        "period_of_validity_to": "2024-02-28",
+        "creation_date": "2024-02-01",
+        "title_of_data": "Schedule Cancelled - COVID-19",
+        "release_date": null,
+        "schedule_status": "C",
+        "creator_reference": "Cancelled due to operational constraints",
+        "general_information": "",
+        "in_flight_service_info_defaults": "",
+        "electronic_ticketing_info": "ET",
+        "creation_time": "09:00",
+        "record_serial_number": 42
+      },
+      "explanation": "American Airlines (AA) cancelled schedule. Status is 'C' (Cancelled) - this withdraws a previously published schedule. Local time mode. Valid period Feb 1-28, 2024. Created Feb 1 at 09:00. Record #42. All associated RT3 flight legs should be removed from booking systems.",
+      "encoding": "ASCII"
+    }
+  ],
+  "usageExamples": [
+    {
+      "@type": "UsageExample",
+      "language": "elixir",
+      "title": "Parse Carrier Record",
+      "code": "# Parse a 200-byte SSIM Carrier record\nraw_record = \"2UXX  0008    07DEC2103MAR2203DEC21...\"\n\ncase AFSpecs.SSIM.CarrierRecord.parse(raw_record) do\n  {:ok, carrier} ->\n    IO.puts \"Airline: #{carrier.airline_designator}\"\n    IO.puts \"Time Mode: #{carrier.time_mode}\"\n    IO.puts \"Valid: #{carrier.period_of_validity_from} to #{carrier.period_of_validity_to}\"\n    IO.puts \"Status: #{carrier.schedule_status}\"\n    \n    # Check if schedule is active\n    if carrier.schedule_status == \"P\" do\n      IO.puts \"Schedule is PUBLISHED - process flight legs\"\n      process_flight_legs(carrier)\n    else\n      IO.puts \"Schedule is CANCELLED - remove existing flights\"\n      remove_flights(carrier.airline_designator)\n    end\n    \n  {:error, error} ->\n    IO.puts \"Parse failed: #{error.message}\"\nend"
+    },
+    {
+      "@type": "UsageExample",
+      "language": "elixir",
+      "title": "Extract Carrier Schedule Periods",
+      "code": "# Extract all carrier schedule periods from SSIM file\ndefmodule CarrierExtractor do\n  def extract_carriers(file_path) do\n    file_path\n    |> File.stream!([], 200)\n    |> Stream.filter(fn record -> String.at(record, 0) == \"2\" end)  # RT2 only\n    |> Stream.map(&AFSpecs.SSIM.CarrierRecord.parse/1)\n    |> Stream.filter(&match?({:ok, _}, &1))\n    |> Stream.map(fn {:ok, carrier} -> carrier end)\n    |> Enum.map(fn carrier ->\n      %{\n        airline: String.trim(carrier.airline_designator),\n        time_mode: carrier.time_mode,\n        valid_from: carrier.period_of_validity_from,\n        valid_to: carrier.period_of_validity_to,\n        status: carrier.schedule_status,\n        season: String.trim(carrier.season)\n      }\n    end)\n  end\nend\n\n# Usage\ncarriers = CarrierExtractor.extract_carriers(\"schedule.ssim\")\nIO.inspect(carriers)"
+    },
+    {
+      "@type": "UsageExample",
+      "language": "elixir",
+      "title": "Process Multi-Carrier Schedule",
+      "code": "# Process SSIM file with multiple carriers\ndefmodule SSIMProcessor do\n  def process_file(file_path) do\n    records = File.stream!(file_path, [], 200)\n    \n    # Group records by carrier\n    process_records(records, nil, [])\n  end\n  \n  defp process_records(records, current_carrier, current_flights) do\n    Enum.reduce(records, {nil, []}, fn record, {carrier, flights} ->\n      case String.at(record, 0) do\n        \"2\" ->  # New carrier (RT2)\n          # Save previous carrier's flights\n          if carrier, do: save_carrier_schedule(carrier, flights)\n          \n          # Parse new carrier\n          {:ok, new_carrier} = AFSpecs.SSIM.CarrierRecord.parse(record)\n          {new_carrier, []}\n        \n        \"3\" ->  # Flight leg (RT3)\n          {:ok, flight} = AFSpecs.SSIM.FlightLegRecord.parse(record)\n          {carrier, [flight | flights]}\n        \n        _ ->\n          {carrier, flights}\n      end\n    end)\n  end\n  \n  defp save_carrier_schedule(carrier, flights) do\n    IO.puts \"Saving #{length(flights)} flights for #{carrier.airline_designator}\"\n    # Save to database, apply time_mode, check schedule_status, etc.\n  end\nend"
+    }
+  ],
+  "references": [
+    {
+      "@type": "Reference",
+      "title": "IATA SSIM Chapter 7.5.2 - Carrier Record (Record Type 2)",
+      "version": "March 2011",
+      "url": "https://www.iata.org/en/publications/ssim/",
+      "description": "Official IATA Standard Schedules Information Manual specification for Carrier Record format"
+    },
+    {
+      "@type": "Reference",
+      "title": "IATA SSIM Chapter 7 - Record Formats",
+      "version": "March 2011",
+      "url": "https://www.iata.org/en/publications/ssim/",
+      "description": "Overall SSIM record format conventions and structure"
+    },
+    {
+      "@type": "Reference",
+      "title": "IATA SSIM Chapter 2 - Data Element Index (DEI)",
+      "version": "March 2011",
+      "url": "https://www.iata.org/en/publications/ssim/",
+      "description": "In-flight service information codes and defaults"
+    }
+  ],
+  "implementationNotes": [
+    "Validate fixed-length fields; pad/truncate to required byte offsets",
+    "Enforce 200-byte fixed-length for RT1-RT5; pad with ASCII space (0x20)",
+    "Right-pad text fields, left-pad numeric fields; validate field ranges and allowed sets",
+    "Record ordering: RT1 Header → [RT2 Carrier → RT3 Flight Leg(s) → RT4 Segment(s)]* → RT5 Trailer",
+    "Normalize dates/times to UTC on decode; preserve original local time and TZ indicators on encode",
+    "If record serial number exceeds 999999, follow SSIM Chapter 2 rule - do not silently wrap; raise and apply documented overflow handling",
+    "CRITICAL: time_mode applies to ALL child RT3/RT4 records - propagate this value through entire carrier block",
+    "Check schedule_status before processing - 'C' (Cancelled) means remove existing flights, don't add new ones",
+    "period_of_validity_from must be ≤ period_of_validity_to - validate date order",
+    "airline_designator should be validated against IATA airline registry for data quality",
+    "Spare fields (spare_1, spare_2) should be blank-filled; parsers may ignore content but validators should check"
+  ],
+  "status": "stable",
+  "dateCreated": "2025-10-18",
+  "dateModified": "2025-10-18",
+  "contributors": [
+    "Active Flights Specification Team",
+    "IATA SSIM Working Group"
+  ],
+  "license": "https://activeflights.com/licenses/specs-v1",
+  "seeAlso": [
+    "ssim.ch7.record_type_1",
+    "ssim.ch7.record_type_3",
+    "ssim.ch7.record_type_4",
+    "ssim.ch7.record_type_5"
+  ],
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2025-11-24",
+      "changes": [
+        "Initial release of Carrier Record (RT2) specification",
+        "Standardized @type to RecordSpecification",
+        "Converted field positions from 1-based to 0-based indexing",
+        "Added sharedVocabulary reference to shared.vocabulary.jsonld",
+        "Added indexing note in conventions section",
+        "Added 1000-byte block structure documentation (1 data record + 4 zero-padding records)"
+      ]
+    }
+  ]
+}

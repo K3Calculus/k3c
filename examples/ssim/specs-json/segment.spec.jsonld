@@ -1,0 +1,887 @@
+{
+  "@context": {
+    "@vocab": "https://activeflights.com/specs/v1/ssim#",
+    "rdf": "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+    "rdfs": "http://www.w3.org/2000/01/rdf-schema#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+    "iata": "https://www.iata.org/",
+    "ssim": "https://activeflights.com/specs/v1/ssim#",
+    "field": "https://activeflights.com/specs/v1/field#",
+    "dei": "https://activeflights.com/specs/v1/dei#"
+  },
+  "@type": "RecordSpecification",
+  "sharedVocabulary": {
+    "@ref": "./shared.vocabulary.jsonld",
+    "description": "References common field definitions, types, and patterns"
+  },
+  "@id": "ssim.ch7.record_type_4",
+  "specId": "ssim.ch7.record_type_4",
+  "version": "1.0.0",
+  "name": "Segment Data Record (Record Type 4)",
+  "recordType": 4,
+  "chapter": "7.5.4",
+  "length": 200,
+  "iataVersion": "2025.35",
+  "status": "active",
+  "aiNotes": "Segment Data Records (RT4) provide additional information for specific Flight Leg Records (RT3). Each RT4 is linked to an RT3 via matching airline_designator, flight_number, itinerary_variation_identifier, leg_sequence_number, and service_type.\n\nKEY CONCEPTS:\n\n1. **Data Element Identifiers (DEI)**: RT4 records are identified by DEIs (bytes 31-33), which define the format and meaning of the segment_data field (bytes 40-194). DEIs are defined in SSIM Chapter 2 and range from 001 to 999.\n\n2. **Multiple RT4s per RT3**: A single flight leg can have many RT4 records, each with a different DEI. Common DEIs include:\n   - DEI 001: Joint Operation Airline Designators (expanded for complex codeshare/franchise)\n   - DEI 010: Aircraft Type/Configuration (updated for new aircraft types)\n   - DEI 106: Booking Designator (booking classes)\n   - DEI 109: Meal Service (updated meal codes)\n   - DEI 111: Operational Suffix (clarified for wet-lease/franchise)\n   - DEI 122: Meals/Service Note\n   - DEI 127: Departure/Arrival Terminal\n   - DEI 503: Traffic Restriction Code (new EU261 regulatory codes)\n   - DEI 504: Codeshare Information (expanded multi-partner support)\n   - DEI 505: Electronic Ticketing Indicator (expanded scenarios)\n\n3. **Board Point / Off Point**: RT4 records can apply to:\n   - Entire leg: board_point_indicator='A', off_point_indicator='B'\n   - Specific segment: board_point='JFK', off_point='LAX'\n   - Partial leg: Combinations of indicators and specific points\n\n4. **Parsing Strategy**: The segment_data field (155 bytes) is raw data that must be parsed using the DEI spec:\n   - DEI \"106\" → Parse as booking classes (1-char per class)\n   - DEI \"001\" → Parse as airline designators (3-char each)\n   - DEI \"122\" → Parse as meal codes and service notes\n   - Unknown DEIs → Return raw data with warning\n\n5. **Ordering**: RT4s are ordered by:\n   - Off point sequence (matching RT3 routing)\n   - DEI sequence (for multiple DEIs on same segment)\n   - Record serial number\n\nEXAMPLE USAGE:\nA Sydney-Singapore-London flight (QF1) might have these RT4s:\n- RT4 DEI 106 (SYD→SIN): Booking classes for first leg\n- RT4 DEI 122 (SYD→SIN): Meal service for first leg\n- RT4 DEI 127 (SYD→SIN): Terminal info for first leg\n- RT4 DEI 106 (SIN→LHR): Booking classes for second leg\n- RT4 DEI 122 (SIN→LHR): Meal service for second leg\n- RT4 DEI 127 (SIN→LHR): Terminal info for second leg\n\nPARSING WORKFLOW:\n1. Read RT4 record (200 bytes)\n2. Extract flight identity fields (bytes 2-14) → Link to RT3\n3. Extract DEI (bytes 31-33) → Determine data format\n4. Extract board/off points (bytes 34-39) → Determine segment applicability\n5. Extract segment_data (bytes 40-194) → Raw data payload\n6. Parse segment_data using DEI spec → Structured data\n\nCRITICAL VALIDATIONS:\n- RT4 must link to existing RT3 (same airline/flight/itinerary/leg/service)\n- segment_data must conform to DEI format from Chapter 2\n- board_point and off_point must match RT3 routing\n- DEI must be valid 3-digit code (001-999, zero-padded)\n\nCOMMON PITFALLS:\n- Forgetting that segment_data is fixed-width 155 bytes (blank-padded)\n- Not zero-padding DEI (\"1\" → \"001\")\n- Assuming one RT4 per RT3 (can be 0 to many)\n- Parsing segment_data without DEI spec (will get garbage)\n- Ignoring board/off point indicators (affects segment applicability)",
+  "description": "Segment Data Records (RT4) provide information applicable to a unique Flight Leg Record (RT3). Each RT4 links to a specific flight leg (bytes 2–14) and provides additional data elements identified by Data Element Identifiers (DEIs). Systems should support multiple RT4s per flight leg, ordered by occurrence of the off point and DEI sequence.",
+  "encoding": {
+    "allowed": [
+      "ASCII",
+      "EBCDIC"
+    ],
+    "ascii": {
+      "blank_hex": "0x20",
+      "zero_hex": "0x30"
+    },
+    "ebcdic": {
+      "blank_hex": "0x40",
+      "zero_hex": "0xF0"
+    }
+  },
+  "statusLegend": {
+    "M": "Mandatory",
+    "C": "Conditional",
+    "O": "Optional"
+  },
+  "conventions": {
+    "positions": "Byte positions are zero-indexed (0-199 for 200-byte records). This aligns with programming language array indexing. Note: IATA SSIM documentation uses 1-based indexing (1-200).",
+    "padding": "Unless noted, blanks are used to pad unused bytes.",
+    "fill_rules": {
+      "blank": "Fill with space characters.",
+      "zero": "Fill with numeric zeroes."
+    },
+    "alignment": {
+      "left": "Left-justify content; pad on the right.",
+      "right": "Right-justify content; pad on the left."
+    }
+  },
+  "fields": [
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#record_type",
+      "name": "record_type",
+      "fieldType": "string",
+      "position": {
+        "start": 0,
+        "end": 0,
+        "length": 1
+      },
+      "status": "M",
+      "const": "4",
+      "description": "Record Type identifier. Always '4' for Segment Data Record.",
+      "aiNotes": "Fixed constant '4' identifying this as a Segment Data Record.\n\nValidation: Must always be exactly '4' (ASCII 0x34).\n\nThis is the first byte of every RT4 record and allows parsers to identify the record type when processing sequential 200-byte blocks.",
+      "examples": [
+        "4"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#operational_suffix",
+      "name": "operational_suffix",
+      "fieldType": "string",
+      "position": {
+        "start": 1,
+        "end": 1,
+        "length": 1
+      },
+      "status": "C",
+      "fill": "blank",
+      "description": "Operational suffix for flight number. Conditional - blank if not used.",
+      "aiNotes": "Optional operational suffix that extends the flight number.\n\nUsage:\n- Typically blank (' ') for regular flights\n- Can be alphanumeric character (A-Z, 0-9) for operational variations\n- Example: Flight 'QF1' might have suffix 'A' for 'QF1A'\n\nConditional logic:\n- Blank fill when not used\n- When present, combines with flight_number for unique flight identity\n\nParsing:\n- If blank: Flight identity is just airline_designator + flight_number\n- If present: Flight identity is airline_designator + flight_number + operational_suffix\n\nExample:\n- ' ' (blank) = No suffix, standard flight\n- 'A' = Operational variation A\n- 'B' = Operational variation B",
+      "examples": [
+        " ",
+        "A",
+        "B",
+        "1"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#airline_designator",
+      "name": "airline_designator",
+      "fieldType": "string",
+      "position": {
+        "start": 2,
+        "end": 4,
+        "length": 3
+      },
+      "status": "M",
+      "align": "left",
+      "pad": "blank",
+      "pattern": "^[A-Z0-9]{2}[A-Z0-9 ]$",
+      "description": "IATA airline designator. 2-3 alphanumeric characters, left-justified with blank padding.",
+      "aiNotes": "IATA airline code identifying the carrier.\n\nFormat:\n- 2-character codes: Right-padded with blank (e.g., 'QF ' for Qantas)\n- 3-character codes: No padding (e.g., 'QFA' if used as 3-char)\n- Always left-justified, blank-padded to 3 bytes\n\nExamples:\n- 'QF ' = Qantas Airways (2-char code)\n- 'AA ' = American Airlines\n- 'BA ' = British Airways\n- 'VA ' = Virgin Australia\n\nValidation:\n- First 2 chars: Must be alphanumeric [A-Z0-9]\n- Third char: Alphanumeric or blank\n- Must match corresponding RT3 record\n\nLinking:\nThis field (combined with flight_number, itinerary_variation_identifier, leg_sequence_number, service_type) links RT4 to its parent RT3 record.\n\nCommon error: Not blank-padding 2-char codes ('QF' → should be 'QF ').",
+      "examples": [
+        "QF ",
+        "AA ",
+        "BA ",
+        "VA ",
+        "XX "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#flight_number",
+      "name": "flight_number",
+      "fieldType": "string",
+      "position": {
+        "start": 5,
+        "end": 8,
+        "length": 4
+      },
+      "status": "M",
+      "align": "right",
+      "pad": "blank",
+      "pattern": "^[A-Z0-9 ]{4}$",
+      "description": "Flight number. 1-4 alphanumeric characters, right-justified with left blank padding.",
+      "aiNotes": "Flight number identifying the specific flight service.\n\nFormat:\n- 1-4 alphanumeric characters\n- Right-justified, left-padded with blanks\n- Typically numeric but can include letters\n\nExamples:\n- '   1' = Flight 1\n- '  12' = Flight 12\n- ' 123' = Flight 123\n- '1234' = Flight 1234\n- ' 12A' = Flight 12A (with letter)\n- '0450' = Flight 450 (zero-padded variant)\n\nNormalization:\n- Strip leading blanks for display: '   1' → '1'\n- Preserve for parsing: Must maintain 4-byte width\n\nLinking:\nCombined with airline_designator to uniquely identify flight:\n- 'QF ' + '   1' = QF1 (Qantas Flight 1)\n- 'AA ' + ' 123' = AA123 (American Airlines Flight 123)\n\nValidation:\n- Must match corresponding RT3 record\n- Right-justified, left-blank-padded to exactly 4 bytes\n\nCommon patterns:\n- Low numbers (1-9): '   1', '   2', ...\n- Medium numbers (10-999): '  10', ' 100', ...\n- High numbers (1000-9999): '1000', '9999'\n- Alphanumeric: ' 12A', '123B', ...",
+      "examples": [
+        "   1",
+        "  12",
+        " 123",
+        "1234",
+        "0450",
+        " 12A"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#itinerary_variation_identifier",
+      "name": "itinerary_variation_identifier",
+      "fieldType": "integer",
+      "position": {
+        "start": 9,
+        "end": 10,
+        "length": 2
+      },
+      "status": "M",
+      "width": 2,
+      "range": {
+        "min": 0,
+        "max": 99
+      },
+      "format": {
+        "zero_pad": 2,
+        "radix": 10
+      },
+      "description": "Itinerary variation identifier (00-99). Groups different routing variations for the same flight number. Value 00 indicates default/no variation.",
+      "aiNotes": "Identifies different routing variations for the same flight number.\n\nFormat:\n- 2-digit zero-padded integer\n- Range: 00 to 99\n- Examples: '00', '01', '02', '15', '99'\n\nPurpose:\nAllows the same flight number to have multiple routing variations. For example:\n- QF1 variation 00: Default routing (no variation)\n- QF1 variation 01: SYD→SIN→LHR (via Singapore)\n- QF1 variation 02: SYD→DXB→LHR (via Dubai)\n\nCommon values:\n- '00' = Default/no variation (found in production SSIM files from major carriers UA, B6)\n- '01' = Primary/standard routing (also common)\n- '02', '03', ... = Alternative routings\n- Higher numbers = Seasonal or special variations\n\nProduction data note:\nValue '00' found extensively in United Airlines (UA) and JetBlue (B6) production SSIM files, indicating default itinerary with no routing variation. This is a valid IATA SSIM pattern where '00' means \"no variation\" rather than being reserved/invalid.\n\nLinking:\nMust match corresponding RT3 record's itinerary_variation_identifier.\n\nOverflow handling:\nIf > 99 variations needed, use itinerary_variation_identifier_overflow field (byte 28).\n\nValidation:\n- Must be zero-padded to 2 digits\n- Must be in range [00, 99]\n- Value '00' is valid (default/no variation)\n\nParsing:\n- Raw: '00' → Integer: 0\n- Raw: '01' → Integer: 1\n- Raw: '15' → Integer: 15\n- Raw: '99' → Integer: 99",
+      "examples": [
+        "00",
+        "01",
+        "02",
+        "15",
+        "99"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#leg_sequence_number",
+      "name": "leg_sequence_number",
+      "fieldType": "integer",
+      "position": {
+        "start": 11,
+        "end": 12,
+        "length": 2
+      },
+      "status": "M",
+      "width": 2,
+      "range": {
+        "min": 0,
+        "max": 99
+      },
+      "format": {
+        "zero_pad": 2,
+        "radix": 10
+      },
+      "description": "Leg sequence number (00-99). Identifies which leg of a multi-leg flight this segment data applies to. Value 00 indicates default/single leg.",
+      "aiNotes": "Identifies the specific leg within a multi-leg flight.\n\nFormat:\n- 2-digit zero-padded integer\n- Range: 00 to 99\n- Examples: '00', '01', '02', '03', ..., '99'\n\nPurpose:\nFor multi-leg flights, each leg is numbered sequentially:\n- Leg 00: Default/single leg (found in production data)\n- Leg 01: First leg (e.g., SYD→SIN)\n- Leg 02: Second leg (e.g., SIN→LHR)\n- Leg 03: Third leg (e.g., LHR→JFK)\n\nCommon values:\n- '00' = Default/single leg (found in production SSIM files from major carriers UA, B6)\n- '01' = First leg or only leg (also common)\n- '02' = Second leg\n- '03'+ = Subsequent legs (rare, usually 1-2 legs max)\n\nProduction data note:\nValue '00' found extensively in United Airlines (UA) and JetBlue (B6) production SSIM files, indicating default leg numbering or single-leg flights. This is a valid IATA SSIM pattern.\n\nExample: QF1 (Sydney to London via Singapore)\n- RT3 Leg 01: SYD→SIN (leg_sequence_number = 01)\n  - RT4 DEI 106 for leg 01 (booking classes)\n  - RT4 DEI 122 for leg 01 (meal service)\n- RT3 Leg 02: SIN→LHR (leg_sequence_number = 02)\n  - RT4 DEI 106 for leg 02 (booking classes)\n  - RT4 DEI 122 for leg 02 (meal service)\n\nNon-stop flights:\n- Can be '00' (default) or '01' (explicit first leg)\n\nLinking:\nMust match corresponding RT3 record's leg_sequence_number to link RT4 to correct leg.\n\nValidation:\n- Must be zero-padded to 2 digits\n- Must be in range [00, 99]\n- Value '00' is valid (default/single leg)\n- Must correspond to existing RT3 leg\n\nParsing:\n- Raw: '00' → Integer: 0\n- Raw: '01' → Integer: 1\n- Raw: '02' → Integer: 2\n- Raw: '99' → Integer: 99",
+      "examples": [
+        "00",
+        "01",
+        "02",
+        "03",
+        "99"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#service_type",
+      "name": "service_type",
+      "fieldType": "string",
+      "position": {
+        "start": 13,
+        "end": 13,
+        "length": 1
+      },
+      "status": "M",
+      "description": "Service type code. Single character indicating passenger/cargo/mail service.",
+      "aiNotes": "Service type indicator for the flight leg.\n\nCommon values:\n- 'J' = Passenger jet service (most common)\n- 'F' = Cargo/freight service\n- 'C' = Combination passenger/cargo\n- 'H' = Helicopter service\n- 'P' = Propeller/turboprop aircraft\n- Other single-char codes per SSIM Chapter 7\n\nPurpose:\nDistinguishes between different types of flight operations for the same flight number.\n\nExample:\n- QF1 service_type='J': Passenger jet service\n- QF1F service_type='F': Cargo service (if same number used)\n\nLinking:\nMust match corresponding RT3 record's service_type.\n\nValidation:\n- Must be single alphanumeric character\n- Must be valid SSIM service type code\n- Cannot be blank\n\nMost common: 'J' for passenger jet operations.",
+      "examples": [
+        "J",
+        "F",
+        "C",
+        "H",
+        "P"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#spare_1",
+      "name": "spare_1",
+      "fieldType": "string",
+      "position": {
+        "start": 14,
+        "end": 26,
+        "length": 13
+      },
+      "status": "M",
+      "fill": "blank",
+      "description": "Reserved for future use. 13 bytes, blank-filled.",
+      "aiNotes": "Reserved field for future SSIM extensions.\n\nCurrent usage:\n- Must be blank-filled (13 ASCII spaces: 0x20)\n- No data should be stored here\n\nValidation:\n- Must be exactly 13 bytes\n- All bytes must be blank (ASCII 0x20 or EBCDIC 0x40)\n\nFuture proofing:\n- Do not use for custom data (will break forward compatibility)\n- IATA may assign meaning in future SSIM versions\n\nParsing:\n- Can skip/ignore when reading\n- Must write blanks when creating RT4 records",
+      "examples": [
+        "             "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#itinerary_variation_identifier_overflow",
+      "name": "itinerary_variation_identifier_overflow",
+      "fieldType": "string",
+      "position": {
+        "start": 27,
+        "end": 27,
+        "length": 1
+      },
+      "status": "C",
+      "fill": "blank",
+      "description": "Overflow field for itinerary_variation_identifier when > 99 variations exist. Conditional - blank if not used.",
+      "aiNotes": "Extension field for itinerary_variation_identifier when more than 99 variations needed.\n\nUsage:\n- Blank (' ') for standard cases (< 100 variations)\n- Single alphanumeric character when itinerary_variation_identifier reaches 99\n- Allows extending to 100+ variations\n\nCombination logic:\n- If blank: Use itinerary_variation_identifier as-is (01-99)\n- If present: Combine with itinerary_variation_identifier for extended range\n\nExample (theoretical, rarely used in practice):\n- itinerary_variation_identifier='99', overflow=' ' → Variation 99\n- itinerary_variation_identifier='01', overflow='A' → Variation 101 (A01)\n- itinerary_variation_identifier='50', overflow='B' → Variation 150 (B50)\n\nReality:\n- Almost always blank (' ') in practice\n- Very rare to have > 99 routing variations for same flight number\n- Included for completeness per SSIM spec\n\nValidation:\n- Single character or blank\n- Alphanumeric [A-Z0-9 ]\n\nConditional status: Only required if > 99 variations exist.",
+      "examples": [
+        " ",
+        "A",
+        "B",
+        "1"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#board_point_indicator",
+      "name": "board_point_indicator",
+      "fieldType": "string",
+      "position": {
+        "start": 28,
+        "end": 28,
+        "length": 1
+      },
+      "status": "M",
+      "description": "Board point indicator. Single character indicating whether board_point field contains specific station code or is a placeholder.",
+      "aiNotes": "Indicator for how to interpret the board_point field.\n\nValid values found in production:\n- 'A' = All board points (segment_data applies to entire leg from first departure)\n- 'B' through 'H' = Various point types (found in UA, B6, WS production data)\n- 'I' = Intermediate board point (specific station in board_point field)\n\nProduction data note:\nValues A-I found extensively in United Airlines (UA), JetBlue (B6), and WestJet (WS) production SSIM files. Common combinations include AB, AC, AD, AE, AF, AG, AH, BC, BD, BE, BF, BG, BH, CD, CE, CF, CG, CH, DE, DF, DG, DH, EF, EG, EH, FG, FH, GH, and HI.\n\nPurpose:\nDetermines segment applicability:\n- 'A': Applies from leg origin to off_point\n- 'B'-'H': Various point type combinations\n- 'I': Applies from specific board_point to off_point\n\nExamples:\n- board_point_indicator='A', board_point='BNE' → From BNE (leg origin) onward\n- board_point_indicator='E', board_point='SIN' → Point type E from SIN\n- board_point_indicator='I', board_point='SIN' → From SIN (intermediate) onward\n\nCommon pattern:\n- Most RT4s use 'A' (apply to entire leg)\n- 'I' used for segment-specific data (e.g., different booking classes per segment)\n- 'B'-'H' used for various specialized point types\n\nInteraction with off_point_indicator:\n- 'A' + 'B' = Entire leg (most common)\n- Various combinations A-I with B-I for specialized segments\n\nValidation:\n- Must be single character A-I\n- Must be valid SSIM board point indicator\n- Cannot be blank\n\nMost common: 'A' (all board points, applies to entire leg).",
+      "examples": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "H",
+        "I"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#off_point_indicator",
+      "name": "off_point_indicator",
+      "fieldType": "string",
+      "position": {
+        "start": 29,
+        "end": 29,
+        "length": 1
+      },
+      "status": "M",
+      "description": "Off point indicator. Single character indicating whether off_point field contains specific station code or is a placeholder.",
+      "aiNotes": "Indicator for how to interpret the off_point field.\n\nValid values found in production:\n- 'B' = All off points (segment_data applies to entire leg until final arrival)\n- 'C' through 'H' = Various point types (found in UA, B6, WS production data)\n- 'I' = Intermediate off point (specific station in off_point field)\n\nProduction data note:\nValues B-I found extensively in United Airlines (UA), JetBlue (B6), and WestJet (WS) production SSIM files. Common combinations with BoardPointIndicator include AB, AC, AD, AE, AF, AG, AH, BC, BD, BE, BF, BG, BH, CD, CE, CF, CG, CH, DE, DF, DG, DH, EF, EG, EH, FG, FH, GH, and HI.\n\nPurpose:\nDetermines segment applicability end point:\n- 'B': Applies until leg destination\n- 'C'-'H': Various point type combinations\n- 'I': Applies until specific off_point\n\nExamples:\n- off_point_indicator='B', off_point='DPS' → Until DPS (leg destination)\n- off_point_indicator='E', off_point='SIN' → Point type E until SIN\n- off_point_indicator='I', off_point='SIN' → Until SIN (intermediate stop)\n\nCommon combinations with board_point_indicator:\n- board='A', off='B': Entire leg (origin → destination) - most common\n- board='A', off='I': Origin → intermediate point\n- board='I', off='B': Intermediate point → destination\n- board='I', off='I': Between two intermediate points\n- Various A-I + B-I combinations for specialized segments\n\nExample scenario:\nQF1 multi-leg: SYD→SIN→LHR\n- RT4 with board='A', off='I', off_point='SIN': SYD→SIN segment only\n- RT4 with board='I', off='B', board_point='SIN': SIN→LHR segment only\n- RT4 with board='A', off='B': Entire SYD→SIN leg (if single RT3)\n\nValidation:\n- Must be single character B-I\n- Must be valid SSIM off point indicator\n- Cannot be blank\n\nMost common: 'B' (all off points, applies until leg destination).",
+      "examples": [
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G",
+        "H",
+        "I"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#data_element_identifier",
+      "name": "data_element_identifier",
+      "fieldType": "string",
+      "position": {
+        "start": 30,
+        "end": 32,
+        "length": 3
+      },
+      "status": "M",
+      "align": "right",
+      "pad": "zero",
+      "pattern": "^[0-9]{3}$",
+      "description": "Data Element Identifier (DEI). 3-digit zero-padded code (001-999) that defines the format and meaning of segment_data field.",
+      "aiNotes": "Data Element Identifier (DEI) - THE MOST CRITICAL FIELD in RT4.\n\nFormat:\n- 3-digit zero-padded code\n- Range: 001 to 999\n- Right-justified, zero-padded\n- Examples: '001', '106', '503', '999'\n\nPurpose:\nDefines how to parse the segment_data field (bytes 40-194). Each DEI has a specific format defined in SSIM Chapter 2. DEI definitions are updated across SSIM editions — new codes are added and existing codes refined. Parsers should handle unknown DEIs gracefully.\n\nCommon DEIs:\n\n**DEI 001 - Joint Operation Airline Designators**\n- Format: Multiple 3-char airline codes\n- Usage: Code-share/joint operation partners\n- Example: 'QF BA AA ' (Qantas + British Airways + American)\n- Note: Expanded in recent editions to support complex codeshare, franchise, and wet-lease arrangements with additional partner slots\n\n**DEI 002 - Airline Designator**\n- Format: Single 3-char airline code\n- Usage: Operating carrier override\n- Example: 'QF ' (operating carrier)\n\n**DEI 010 - Aircraft Type/Configuration**\n- Format: Aircraft type and configuration details\n- Usage: Supplemental aircraft information beyond RT3 aircraft_type field\n- Note: Updated regularly as new IATA aircraft type designators are added (e.g., B737 MAX family, A350 variants, A321XLR)\n\n**DEI 106 - Booking Designator**\n- Format: Multiple 1-char booking class codes\n- Usage: Available booking classes for segment\n- Example: 'JCDZYBWHKLREONVPQTISFUMAGX' (26 classes)\n\n**DEI 109 - Meal Service**\n- Format: Meal codes per booking class\n- Usage: In-flight meal/catering service details\n- Example: 'BLSD' (Breakfast, Lunch, Snack, Dinner)\n- Note: Meal codes updated in recent editions; new codes added for special dietary/premium meal categories\n\n**DEI 111 - Operational Suffix**\n- Format: Single alphanumeric character\n- Usage: Extended guidance for operational suffixes tied to codeshare, wet-lease, and franchise operations\n- Note: Clarified in post-2011 editions for disambiguation of wet-lease vs franchise vs codeshare operations\n\n**DEI 122 - Meals/Service Note**\n- Format: Meal codes + service notes\n- Usage: In-flight service information (complements DEI 109)\n- Example: 'BLSD' (Breakfast, Lunch, Snack, Dinner)\n\n**DEI 127 - Departure/Arrival Terminal**\n- Format: Terminal codes\n- Usage: Airport terminal information\n- Example: 'T3' (Terminal 3)\n\n**DEI 503 - Traffic Restriction Code**\n- Format: Restriction codes\n- Usage: Traffic and carriage restrictions for the segment\n- Note: New restriction codes added in recent editions for EU261/EC261 regulatory compliance and regional passenger rights regulations\n\n**DEI 504 - Codeshare Information**\n- Format: Extended codeshare designator data\n- Usage: Detailed codeshare and franchise arrangement information beyond DEI 001\n- Note: Expanded in recent editions to handle complex multi-partner codeshare, franchise, and virtual interline arrangements\n\n**DEI 505 - Electronic Ticketing Indicator**\n- Format: ET indicator\n- Usage: E-ticket capability and interline e-ticketing flag\n- Example: 'Y' (yes) or 'N' (no)\n- Note: Updated to accommodate expanded ticketing scenarios including interline e-ticketing, agency debit memos, and IATA BSP changes\n\nParsing workflow:\n1. Read DEI from bytes 31-33 (e.g., '106')\n2. Look up DEI spec: `schemas/dei/106.yaml`\n3. Parse segment_data (bytes 40-194) using DEI field definitions\n4. If DEI unknown: Return raw segment_data with warning\n\nZero-padding normalization:\n- DEI '1' stored as '001'\n- DEI '15' stored as '015'\n- DEI '106' stored as '106'\n\nDEI spec locations:\n- schemas/dei/01.yaml (DEI 001)\n- schemas/dei/02.yaml (DEI 002)\n- schemas/dei/10.yaml (DEI 010)\n- schemas/dei/106.yaml (DEI 106)\n- schemas/dei/109.yaml (DEI 109)\n- schemas/dei/111.yaml (DEI 111)\n- schemas/dei/122.yaml (DEI 122)\n- schemas/dei/127.yaml (DEI 127)\n- schemas/dei/503.yaml (DEI 503)\n- schemas/dei/504.yaml (DEI 504)\n- schemas/dei/505.yaml (DEI 505)\n- ... (62+ total DEI specs)\n\nValidation:\n- Must be exactly 3 digits\n- Must be zero-padded\n- Must be in range [001, 999]\n- Should correspond to known DEI spec (warning if unknown)\n\nCommon error:\n- Forgetting zero-padding: '1' instead of '001'\n- Treating as integer instead of string (loses leading zeros)\n\nBest practice:\n- Always treat as string to preserve zero-padding\n- Normalize during lookup: '001' → integer 1 → lookup 'dei/01.yaml'\n- Handle unknown DEIs gracefully — new DEIs are added across SSIM editions",
+      "examples": [
+        "001",
+        "002",
+        "010",
+        "106",
+        "109",
+        "111",
+        "122",
+        "127",
+        "503",
+        "504",
+        "505"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#board_point",
+      "name": "board_point",
+      "fieldType": "string",
+      "position": {
+        "start": 33,
+        "end": 35,
+        "length": 3
+      },
+      "status": "M",
+      "pattern": "^[A-Z]{3}$",
+      "description": "Board point station code. 3-character IATA airport/city code where passengers/cargo boards.",
+      "aiNotes": "IATA airport/city code for boarding point.\n\nFormat:\n- 3-character IATA code\n- All uppercase letters [A-Z]\n- Examples: 'BNE', 'SYD', 'LAX', 'LHR', 'SIN'\n\nInterpretation:\nDepends on board_point_indicator:\n- If board_point_indicator='A': This is typically the leg origin (reference only)\n- If board_point_indicator='I': This is the specific intermediate boarding point\n\nExamples:\n- board_point_indicator='A', board_point='BNE' → From Brisbane (leg origin)\n- board_point_indicator='I', board_point='SIN' → From Singapore (intermediate)\n\nMulti-leg scenario:\nQF1: SYD→SIN→LHR (two RT3 legs)\n- RT3 Leg 01: SYD→SIN\n  - RT4 DEI 106: board_point='SYD' (leg 01 origin)\n- RT3 Leg 02: SIN→LHR\n  - RT4 DEI 106: board_point='SIN' (leg 02 origin)\n\nValidation:\n- Must be valid 3-letter IATA code\n- Must be all uppercase\n- Should correspond to airport/city in IATA reference data\n- If board_point_indicator='I', must be intermediate point in RT3 routing\n- If board_point_indicator='A', typically matches RT3 departure_station\n\nCommon airports:\n- 'SYD' = Sydney Kingsford Smith\n- 'LAX' = Los Angeles International\n- 'LHR' = London Heathrow\n- 'SIN' = Singapore Changi\n- 'JFK' = New York JFK\n- 'DPS' = Bali Denpasar\n\nRelationship to RT3:\nMust be part of RT3 routing (either departure_station or intermediate stop).",
+      "examples": [
+        "BNE",
+        "SYD",
+        "LAX",
+        "LHR",
+        "SIN",
+        "JFK",
+        "DPS"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#off_point",
+      "name": "off_point",
+      "fieldType": "string",
+      "position": {
+        "start": 36,
+        "end": 38,
+        "length": 3
+      },
+      "status": "M",
+      "pattern": "^[A-Z]{3}$",
+      "description": "Off point station code. 3-character IATA airport/city code where passengers/cargo disembarks.",
+      "aiNotes": "IATA airport/city code for disembarkation point.\n\nFormat:\n- 3-character IATA code\n- All uppercase letters [A-Z]\n- Examples: 'DPS', 'LAX', 'LHR', 'SIN', 'JFK'\n\nInterpretation:\nDepends on off_point_indicator:\n- If off_point_indicator='B': This is typically the leg destination (reference only)\n- If off_point_indicator='I': This is the specific intermediate disembarkation point\n\nExamples:\n- off_point_indicator='B', off_point='DPS' → Until Bali (leg destination)\n- off_point_indicator='I', off_point='SIN' → Until Singapore (intermediate)\n\nCommon segment patterns:\n\n**Entire leg** (board='A', off='B'):\n- board_point='BNE', off_point='DPS' → BNE to DPS (full leg)\n\n**First segment** (board='A', off='I'):\n- board_point='SYD', off_point='SIN' → SYD to SIN only\n\n**Last segment** (board='I', off='B'):\n- board_point='SIN', off_point='LHR' → SIN to LHR only\n\n**Middle segment** (board='I', off='I'):\n- board_point='SIN', off_point='BKK' → SIN to BKK only\n\nMulti-leg example:\nQF1: SYD→SIN→LHR (two RT3 legs)\n- RT3 Leg 01: SYD→SIN\n  - RT4 DEI 106: off_point='SIN' (leg 01 destination)\n- RT3 Leg 02: SIN→LHR\n  - RT4 DEI 106: off_point='LHR' (leg 02 destination)\n\nValidation:\n- Must be valid 3-letter IATA code\n- Must be all uppercase\n- Should correspond to airport/city in IATA reference data\n- If off_point_indicator='I', must be intermediate point in RT3 routing\n- If off_point_indicator='B', typically matches RT3 arrival_station\n- Cannot be same as board_point (no zero-length segments)\n\nRelationship to RT3:\nMust be part of RT3 routing (either arrival_station or intermediate stop).\n\nOrdering:\nRT4 records are ordered by off_point sequence (matching RT3 routing order).",
+      "examples": [
+        "DPS",
+        "LAX",
+        "LHR",
+        "SIN",
+        "JFK",
+        "BKK",
+        "DXB"
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#segment_data",
+      "name": "segment_data",
+      "fieldType": "string",
+      "position": {
+        "start": 39,
+        "end": 193,
+        "length": 155
+      },
+      "status": "C",
+      "align": "left",
+      "pad": "blank",
+      "description": "Raw segment data payload. 155 bytes containing data in format defined by data_element_identifier (DEI). Blank-padded if not fully used. This is unparsed raw data - see parsed_segment_data extension for structured data.",
+      "aiNotes": "Raw data payload for the segment - THE CRITICAL DATA FIELD.\n\nFormat:\n- 155 bytes (largest field in RT4)\n- Format defined by data_element_identifier (DEI)\n- Left-justified, blank-padded\n- Conditional: Blank if no data for this DEI\n\nParsing strategy:\n1. Extract DEI from bytes 31-33 (e.g., '106')\n2. Load DEI spec from `schemas/dei/{DEI}.yaml`\n3. Parse these 155 bytes using DEI field definitions\n4. If DEI unknown: Return raw data with warning\n\nExample data by DEI:\n\n**DEI 001 - Joint Operation Airline Designators:**\n```\n'QF BA AA ' (155 bytes, rest blank)\n↓ Parsed:\n{\n  designator_1: 'QF ',\n  designator_2: 'BA ',\n  designator_3: 'AA '\n}\n```\n\n**DEI 106 - Booking Designator:**\n```\n'JCDZYBWHKLREONVPQTISFUMAGX' (155 bytes, rest blank)\n↓ Parsed:\n{\n  booking_classes: ['J', 'C', 'D', 'Z', 'Y', 'B', 'W', 'H', 'K', 'L',\n                   'R', 'E', 'O', 'N', 'V', 'P', 'Q', 'T', 'I', 'S',\n                   'F', 'U', 'M', 'A', 'G', 'X']\n}\n```\n\n**DEI 122 - Meals/Service Note:**\n```\n'BLSD' (155 bytes, rest blank)\n↓ Parsed:\n{\n  meal_codes: ['B', 'L', 'S', 'D'],\n  meal_descriptions: ['Breakfast', 'Lunch', 'Snack', 'Dinner']\n}\n```\n\n**DEI 127 - Terminal:**\n```\n'D3  T2  ' (departure terminal D3, arrival terminal T2, rest blank)\n↓ Parsed:\n{\n  departure_terminal: 'D3',\n  arrival_terminal: 'T2'\n}\n```\n\nImportant notes:\n- This field is RAW/UNPARSED data\n- Cannot interpret without DEI spec\n- Always 155 bytes (blank-padded if data < 155 bytes)\n- Parsing handled by parsed_segment_data extension field\n\nCommon pitfall:\nTrying to parse without DEI spec → Will get garbage data\n\nBest practice:\n- Store raw segment_data as-is\n- Use parsed_segment_data extension for structured access\n- Validate parsed data against DEI spec\n- Handle unknown DEIs gracefully (return raw data with warning)\n\nBlank-padding rules:\n- Actual data left-justified\n- Remaining bytes blank-filled\n- Example: 'ABC' → 'ABC' + (152 blanks)\n\nReal-world example from YAML:\n```\nsegment_data: 'JCDZYBWHKLREONVPQTISFUMAGX'\n             + (129 blanks to reach 155 bytes)\n```",
+      "examples": [
+        "JCDZYBWHKLREONVPQTISFUMAGX                                                                                                                           ",
+        "QF BA AA                                                                                                                                           ",
+        "BLSD                                                                                                                                               ",
+        "D3  T2                                                                                                                                             "
+      ]
+    },
+    {
+      "@type": "Field",
+      "@id": "ssim.ch7.record_type_4#record_serial_number",
+      "name": "record_serial_number",
+      "fieldType": "integer",
+      "position": {
+        "start": 194,
+        "end": 199,
+        "length": 6
+      },
+      "status": "M",
+      "width": 6,
+      "align": "right",
+      "pad": "zero",
+      "format": {
+        "zero_pad": 6,
+        "radix": 10
+      },
+      "range": [
+        1,
+        999999
+      ],
+      "description": "Sequential record number. 6-digit zero-padded number (000001-999999). Increments sequentially from RT1 through all records in the dataset.",
+      "aiNotes": "Sequential record counter for the entire SSIM file.\n\nFormat:\n- 6-digit zero-padded integer\n- Range: 000001 to 999999\n- Right-justified, zero-padded\n- Examples: '000001', '000004', '123456', '999999'\n\nPurpose:\n- Provides sequential numbering for all records in dataset\n- Enables record ordering and integrity checks\n- Allows detecting missing/duplicate records\n\nNumbering scheme:\n- RT1 (Header): Always '000001'\n- RT2 (Carrier): '000002' (first carrier record)\n- RT3 (Flight Leg): Increments from RT2\n- RT4 (Segment Data): Increments from RT3\n- RT5 (Trailer): Last record, highest number\n\nExample sequence:\n- 000001: RT1 (Header)\n- 000002: RT2 (Carrier for Airline XX)\n- 000003: RT3 (Flight XX450, Leg 01)\n- 000004: RT4 (DEI 106 for XX450, Leg 01) ← This record\n- 000005: RT4 (DEI 122 for XX450, Leg 01)\n- 000006: RT3 (Flight XX451, Leg 01)\n- ...\n- 999999: RT5 (Trailer)\n\nOverflow handling:\nIf record count exceeds 999999:\n- Numbering restarts at 000002 (000001 reserved for RT1)\n- Per SSIM Chapter 2 overflow rules\n- Should log warning (files this large are extremely rare)\n\nValidation:\n- Must be 6 digits, zero-padded\n- Must be sequential (no gaps allowed)\n- Cannot be 000000 (invalid)\n- RT1 must always be 000001\n- Each record must be previous_record_serial_number + 1\n\nIntegrity checking:\n- Compare to expected sequence\n- Detect missing records (gaps in sequence)\n- Detect duplicate records (same serial number)\n\nParsing:\n- Raw: '000004' → Integer: 4\n- Raw: '123456' → Integer: 123456",
+      "examples": [
+        "000001",
+        "000004",
+        "000123",
+        "123456",
+        "999999"
+      ]
+    }
+  ],
+  "validation": {
+    "length": {
+      "equals": 200,
+      "description": "All RT4 records must be exactly 200 bytes"
+    },
+    "required_constants": [
+      {
+        "field": "record_type",
+        "value": "4",
+        "description": "Record type must always be '4'"
+      }
+    ],
+    "field_lengths": [
+      {
+        "field": "airline_designator",
+        "equals": 3
+      },
+      {
+        "field": "flight_number",
+        "equals": 4
+      },
+      {
+        "field": "spare_1",
+        "equals": 13
+      },
+      {
+        "field": "data_element_identifier",
+        "equals": 3
+      },
+      {
+        "field": "board_point",
+        "equals": 3
+      },
+      {
+        "field": "off_point",
+        "equals": 3
+      },
+      {
+        "field": "segment_data",
+        "equals": 155
+      },
+      {
+        "field": "record_serial_number",
+        "equals": 6
+      }
+    ],
+    "padding_rules": [
+      {
+        "field": "spare_1",
+        "fill": "blank",
+        "description": "spare_1 must be blank-filled (13 blanks)"
+      }
+    ],
+    "pattern_validations": [
+      {
+        "field": "airline_designator",
+        "pattern": "^[A-Z0-9]{2}[A-Z0-9 ]$",
+        "description": "2-3 alphanumeric characters, left-justified, blank-padded"
+      },
+      {
+        "field": "flight_number",
+        "pattern": "^[A-Z0-9 ]{4}$",
+        "description": "1-4 alphanumeric characters, right-justified, left-blank-padded"
+      },
+      {
+        "field": "data_element_identifier",
+        "pattern": "^[0-9]{3}$",
+        "description": "3-digit zero-padded code (001-999)"
+      },
+      {
+        "field": "board_point",
+        "pattern": "^[A-Z]{3}$",
+        "description": "3-letter IATA airport/city code, uppercase"
+      },
+      {
+        "field": "off_point",
+        "pattern": "^[A-Z]{3}$",
+        "description": "3-letter IATA airport/city code, uppercase"
+      }
+    ],
+    "range_validations": [
+      {
+        "field": "itinerary_variation_identifier",
+        "min": 0,
+        "max": 99,
+        "description": "Must be between 00 and 99 (00 = default/no variation)"
+      },
+      {
+        "field": "leg_sequence_number",
+        "min": 0,
+        "max": 99,
+        "description": "Must be between 00 and 99 (00 = default/single leg)"
+      },
+      {
+        "field": "record_serial_number",
+        "min": 1,
+        "max": 999999,
+        "description": "Must be between 000001 and 999999"
+      }
+    ]
+  },
+  "semantic_rules": [
+    {
+      "@id": "ssim.ch7.record_type_4#sr.rt4_must_link_to_rt3",
+      "id": "sr.rt4_must_link_to_rt3",
+      "description": "Each RT4 must correspond to a valid RT3 (Flight Leg Record) with same airline_designator, flight_number, itinerary_variation_identifier, leg_sequence_number, and service_type.",
+      "check": "external",
+      "severity": "error",
+      "validation_logic": "For each RT4 record, verify that an RT3 record exists with matching:\n- airline_designator\n- flight_number (including operational_suffix if present)\n- itinerary_variation_identifier (with overflow if present)\n- leg_sequence_number\n- service_type\n\nIf no matching RT3 found, this is an orphaned RT4 record (critical error).",
+      "aiNotes": "CRITICAL LINKING RULE: RT4 records cannot exist independently.\n\nEvery RT4 must link to exactly one RT3 record via composite key:\n- airline_designator (bytes 3-5)\n- flight_number (bytes 6-9)\n- itinerary_variation_identifier (bytes 10-11)\n- leg_sequence_number (bytes 12-13)\n- service_type (byte 14)\n\nExample:\nRT3: airline='QF ', flight='0450', itinerary_var=01, leg_seq=01, service='J'\nRT4: airline='QF ', flight='0450', itinerary_var=01, leg_seq=01, service='J' ✓ Valid link\nRT4: airline='QF ', flight='0450', itinerary_var=01, leg_seq=02, service='J' ✗ No matching RT3\n\nCommon errors:\n- Wrong leg_sequence_number (RT4 for leg 02 when only leg 01 exists)\n- Wrong flight_number (typo)\n- Wrong service_type (RT4 service='J' but RT3 service='F')\n- RT3 record missing/deleted but RT4 remains (orphaned record)\n\nValidation approach:\n1. Build index of all RT3 records by composite key\n2. For each RT4, lookup composite key in RT3 index\n3. If not found: Log error with details\n4. Track orphaned RT4s for debugging\n\nEdge cases:\n- Multiple RT4s can link to same RT3 (different DEIs)\n- RT3 can exist without any RT4s (valid, just no additional data)\n- operational_suffix must also match if present"
+    },
+    {
+      "@id": "ssim.ch7.record_type_4#sr.rt4_dei_format",
+      "id": "sr.rt4_dei_format",
+      "description": "Segment data (bytes 40-194) must conform to the format defined by its DEI in Chapter 2 / DEI specifications.",
+      "check": "external",
+      "severity": "warning",
+      "validation_logic": "For each RT4 record:\n1. Extract data_element_identifier (DEI)\n2. Load DEI spec from schemas/dei/{DEI}.yaml\n3. Parse segment_data using DEI field definitions\n4. Validate parsed data against DEI spec constraints\n5. If DEI spec not found: Log warning but don't fail (forward compatibility)\n6. If parsing fails: Log error with details",
+      "aiNotes": "DATA FORMAT VALIDATION: segment_data must match DEI spec.\n\nEach DEI defines specific field structure for the 155-byte segment_data field.\n\nExamples:\n\n**DEI 106 - Booking Designator:**\n- Format: 1-char booking class codes, sequential, blank-padded\n- Valid: 'JCDZYBWHKL' (10 classes) + blanks\n- Invalid: 'JC DZ' (contains space between classes)\n- Invalid: 'jcdz' (lowercase not allowed)\n\n**DEI 001 - Joint Operation:**\n- Format: Multiple 3-char airline codes, blank-padded\n- Valid: 'QF BA AA ' (3 airlines, each 3 chars)\n- Invalid: 'QFBAAA' (missing spacing)\n- Invalid: 'QF  BA' (wrong padding)\n\n**DEI 122 - Meals/Service:**\n- Format: Meal codes per SSIM standard\n- Valid: 'BLSD' (Breakfast, Lunch, Snack, Dinner)\n- Invalid: 'XXXX' (invalid meal codes)\n\nValidation strategy:\n1. Parse segment_data using DEI spec\n2. Check field types (string, integer, etc.)\n3. Check field lengths\n4. Check allowed values / enums\n5. Check patterns / regex\n6. Check cross-field constraints\n\nUnknown DEI handling:\n- DEI spec not found: Log warning, store raw data, continue\n- Enables forward compatibility with new DEIs\n- Don't fail entire file parse\n\nSeverity: Warning (not error) because:\n- New/custom DEIs may not have specs yet\n- Backward compatibility with older SSIM versions\n- Allow ingestion even if some DEIs unknown\n\nBest practice:\n- Validate known DEIs strictly\n- Log unknown DEIs for review\n- Track DEI usage statistics\n- Update DEI specs as new ones discovered"
+    },
+    {
+      "@id": "ssim.ch7.record_type_4#sr.rt4_board_off_routing",
+      "id": "sr.rt4_board_off_routing",
+      "description": "board_point and off_point must be valid stations in the RT3 routing. If board_point_indicator='I' or off_point_indicator='I', the respective points must be intermediate stops in the RT3 leg.",
+      "check": "external",
+      "severity": "error",
+      "validation_logic": "For each RT4 record:\n1. Find linked RT3 record\n2. Extract RT3 routing (departure_station, arrival_station, intermediate stops)\n3. Validate board_point:\n   - If board_point_indicator='A': board_point should be RT3 departure_station\n   - If board_point_indicator='I': board_point must be in RT3 intermediate stops\n4. Validate off_point:\n   - If off_point_indicator='B': off_point should be RT3 arrival_station\n   - If off_point_indicator='I': off_point must be in RT3 intermediate stops\n5. Ensure board_point ≠ off_point (no zero-length segments)",
+      "aiNotes": "ROUTING VALIDATION: board_point and off_point must match RT3 routing.\n\nScenario 1: Direct flight (no intermediate stops)\nRT3: SYD→LHR (non-stop)\nRT4 valid:\n- board='A', board_point='SYD', off='B', off_point='LHR' ✓\nRT4 invalid:\n- board='I', board_point='SIN', off='B', off_point='LHR' ✗ (SIN not in routing)\n\nScenario 2: Flight with intermediate stops\nRT3: SYD→SIN→LHR (stops at SIN)\nRT4 valid:\n- board='A', board_point='SYD', off='B', off_point='LHR' ✓ (entire leg)\n- board='A', board_point='SYD', off='I', off_point='SIN' ✓ (first segment)\n- board='I', board_point='SIN', off='B', off_point='LHR' ✓ (second segment)\nRT4 invalid:\n- board='I', board_point='BKK', off='B', off_point='LHR' ✗ (BKK not in routing)\n- board='A', board_point='SYD', off='A', off_point='SYD' ✗ (zero-length segment)\n\nIndicator meanings:\n- 'A' = All (from leg origin)\n- 'B' = All (to leg destination)\n- 'I' = Intermediate (specific station)\n\nValidation logic:\n1. Build RT3 routing list: [departure_station, ...intermediate_stops, arrival_station]\n2. If board_point_indicator='A': Verify board_point = departure_station\n3. If board_point_indicator='I': Verify board_point in intermediate_stops\n4. If off_point_indicator='B': Verify off_point = arrival_station\n5. If off_point_indicator='I': Verify off_point in intermediate_stops\n6. Verify board_point ≠ off_point\n7. Verify board_point comes before off_point in routing sequence\n\nCommon errors:\n- Using intermediate point without 'I' indicator\n- Using 'I' indicator with leg endpoint (should be 'A' or 'B')\n- board/off points in wrong order\n- Typos in station codes\n- Station code not in RT3 routing"
+    },
+    {
+      "@id": "ssim.ch7.record_type_4#sr.record_serial_overflow",
+      "id": "sr.record_serial_overflow",
+      "description": "Record Serial Numbers are 6-digit numeric fields (000001-999999). If the record count exceeds 999999, numbering must restart at 000002 because 000001 is reserved for the Header Record (RT1).",
+      "check": "external",
+      "severity": "warning",
+      "validation_logic": "Monitor record_serial_number throughout file parse:\n1. RT1 must be 000001\n2. Subsequent records increment sequentially\n3. If record_serial_number reaches 999999:\n   - Next record should wrap to 000002 (skip 000001)\n   - Log warning about overflow\n4. Detect gaps or duplicates in sequence\n5. Verify continuity across overflow boundary",
+      "aiNotes": "OVERFLOW HANDLING: Very rare but must be handled per SSIM spec.\n\nNormal sequence (no overflow):\n- 000001: RT1 (Header)\n- 000002: RT2 (Carrier)\n- 000003: RT3 (Flight Leg)\n- 000004: RT4 (Segment Data) ← This record\n- ...\n- 999999: RT5 (Trailer) or last record\n\nOverflow sequence (extremely rare, multi-million record files):\n- ...\n- 999997: RT4 (Segment Data)\n- 999998: RT4 (Segment Data)\n- 999999: RT4 (Segment Data)\n- 000002: RT4 (Segment Data) ← Wrapped! Skip 000001\n- 000003: RT4 (Segment Data)\n- ...\n- NNNNNN: RT5 (Trailer)\n\nKey rules:\n1. 000001 is ALWAYS reserved for RT1 (Header)\n2. Overflow wraps to 000002 (not 000000 or 000001)\n3. Must maintain sequential increments (no gaps)\n4. Log warning when overflow occurs\n\nValidation:\n- Track previous_serial_number\n- Expected next = (previous + 1) % 1000000\n- If expected = 0 or 1: Set to 2 (overflow rule)\n- If actual ≠ expected: Log error (gap or duplicate)\n\nReality:\n- Files rarely exceed 999,999 records\n- Most files have < 100,000 records\n- But spec must handle overflow for completeness\n\nImplementation note:\nUse modulo arithmetic with special case for 000001:\n```\nif previous == 999999:\n  next = 2  # Skip 0 and 1\nelse:\n  next = previous + 1\n```"
+    }
+  ],
+  "relationships": [
+    {
+      "@type": "Relationship",
+      "relationType": "belongsTo",
+      "target": "ssim.ch7.record_type_3",
+      "description": "Each RT4 (Segment Data) belongs to exactly one RT3 (Flight Leg) via composite key: airline_designator + flight_number + itinerary_variation_identifier + leg_sequence_number + service_type",
+      "cardinality": "many-to-one",
+      "joinCondition": {
+        "rt4.airline_designator": "rt3.airline_designator",
+        "rt4.flight_number": "rt3.flight_number",
+        "rt4.itinerary_variation_identifier": "rt3.itinerary_variation_identifier",
+        "rt4.leg_sequence_number": "rt3.leg_sequence_number",
+        "rt4.service_type": "rt3.service_type"
+      },
+      "aiNotes": "RT4 → RT3 relationship:\n\nMultiple RT4 records can belong to one RT3 (different DEIs):\n- RT3: QF450 BNE→DPS Leg 01\n  - RT4 DEI 106 (booking classes)\n  - RT4 DEI 122 (meal service)\n  - RT4 DEI 127 (terminal info)\n  - RT4 DEI 001 (joint operation)\n\nComposite key matching ensures correct linkage across all flight identity fields."
+    },
+    {
+      "@type": "Relationship",
+      "relationType": "references",
+      "target": "dei.{data_element_identifier}",
+      "description": "Each RT4 references a DEI (Data Element Identifier) specification that defines the format and meaning of segment_data field",
+      "cardinality": "many-to-one",
+      "joinCondition": {
+        "rt4.data_element_identifier": "dei.id"
+      },
+      "aiNotes": "RT4 → DEI relationship:\n\nDynamic reference based on data_element_identifier value:\n- RT4 with DEI '106' → references dei/106.yaml (Booking Designator)\n- RT4 with DEI '001' → references dei/01.yaml (Joint Operation)\n- RT4 with DEI '122' → references dei/122.yaml (Meals/Service)\n\nDEI spec defines:\n- Field structure within segment_data (155 bytes)\n- Field types and formats\n- Validation rules\n- Parsing logic\n\nUnknown DEIs:\n- If DEI spec not found: Return raw segment_data with warning\n- Enables forward compatibility with new DEIs"
+    },
+    {
+      "@type": "Relationship",
+      "relationType": "sequentialOrder",
+      "target": "ssim.ch7.record_type_4",
+      "description": "RT4 records are ordered by: (1) off_point sequence matching RT3 routing, (2) DEI sequence for same segment, (3) record_serial_number",
+      "cardinality": "one-to-many",
+      "aiNotes": "RT4 ordering rules:\n\nFor multi-segment flight (e.g., SYD→SIN→LHR):\n1. All RT4s for SYD→SIN segment (ordered by DEI)\n2. All RT4s for SIN→LHR segment (ordered by DEI)\n\nExample ordering:\n- RT4 off_point='SIN', DEI='001' (Joint Operation, first segment)\n- RT4 off_point='SIN', DEI='106' (Booking, first segment)\n- RT4 off_point='SIN', DEI='122' (Meals, first segment)\n- RT4 off_point='LHR', DEI='001' (Joint Operation, second segment)\n- RT4 off_point='LHR', DEI='106' (Booking, second segment)\n- RT4 off_point='LHR', DEI='122' (Meals, second segment)\n\nThis ordering enables efficient sequential parsing and segment reconstruction."
+    }
+  ],
+  "extensions": [
+    {
+      "@type": "Extension",
+      "@id": "ssim.ch7.record_type_4#ext_parsed_segment_data",
+      "name": "parsed_segment_data",
+      "description": "Decoded/parsed segment_data field based on the data_element_identifier (DEI). This field is populated by looking up the DEI spec (from Chapter 2 DEI definitions) and parsing the raw segment_data bytes according to that spec.",
+      "type": "object",
+      "loadingStrategy": "lazy",
+      "oneOf": [
+        {
+          "$ref": "dei/{data_element_identifier}",
+          "description": "Dynamic reference to DEI spec based on data_element_identifier value"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "data": {
+              "type": "string",
+              "description": "Raw unparsed segment_data when DEI spec is unavailable"
+            }
+          },
+          "description": "Fallback structure for unknown DEIs"
+        }
+      ],
+      "parsingStrategy": "# Elixir pseudocode for DEI-based parsing\ndef parse_segment_data(segment_record) do\n  dei = segment_record.data_element_identifier |> String.trim_leading(\"0\")\n  raw_data = segment_record.segment_data\n\n  case load_dei_spec(dei) do\n    {:ok, dei_spec} ->\n      # Parse using DEI field definitions\n      parse_dei_fields(raw_data, dei_spec)\n\n    {:error, :not_found} ->\n      # Fallback: return raw data with warning\n      Logger.warn(\"Unknown DEI: #{dei}, returning raw segment_data\")\n      %{data: raw_data}\n  end\nend",
+      "exampleUsage": "# Example 1: Known DEI (106 - Booking Designator)\n%SegmentData{\n  data_element_identifier: \"106\",\n  board_point: \"BNE\",\n  off_point: \"DPS\",\n  segment_data: \"JCDZYBWHKLREONVPQTISFUMAGX                             ...\",\n  parsed_segment_data: %DEI106BookingDesignator{\n    booking_classes: [\"J\", \"C\", \"D\", \"Z\", \"Y\", \"B\", \"W\", \"H\", \"K\", \"L\",\n                     \"R\", \"E\", \"O\", \"N\", \"V\", \"P\", \"Q\", \"T\", \"I\", \"S\",\n                     \"F\", \"U\", \"M\", \"A\", \"G\", \"X\"]\n  }\n}\n\n# Example 2: Unknown DEI (fallback)\n%SegmentData{\n  data_element_identifier: \"999\",\n  board_point: \"BNE\",\n  off_point: \"DPS\",\n  segment_data: \"UNKNOWNDATA...\",\n  parsed_segment_data: %{\n    data: \"UNKNOWNDATA...\"\n  }\n}\n\n# Example 3: DEI 001 (Joint Operation)\n%SegmentData{\n  data_element_identifier: \"001\",\n  board_point: \"BNE\",\n  off_point: \"DPS\",\n  segment_data: \"QF BA AA                                              ...\",\n  parsed_segment_data: %DEI001JointOperation{\n    designator_1: \"QF \",\n    designator_2: \"BA \",\n    designator_3: \"AA \"\n  }\n}",
+      "notes": [
+        "This field is NOT encoded in the 200-byte fixed-width RT4 record",
+        "It is computed at parse time by decoding segment_data using DEI specs",
+        "DEI specs are defined in schemas/dei/*.yaml (62+ definitions)",
+        "Zero-padding is normalized (DEI '001' matches dei/01.yaml)",
+        "Unknown DEIs log a warning but don't fail parsing",
+        "Fallback structure always includes 'data' field with raw bytes",
+        "This enables forward compatibility with new/custom DEIs"
+      ],
+      "deiSpecLocations": [
+        "schemas/dei/01.yaml - DEI 001: Joint Operation Airline Designators",
+        "schemas/dei/02.yaml - DEI 002: Airline Designator",
+        "schemas/dei/106.yaml - DEI 106: Booking Designator",
+        "schemas/dei/122.yaml - DEI 122: Meals/Service Note",
+        "schemas/dei/127.yaml - DEI 127: Departure/Arrival Terminal",
+        "schemas/dei/503.yaml - DEI 503: Electronic Ticketing",
+        "... (62+ total DEI specs)"
+      ],
+      "aiNotes": "EXTENSION: Structured access to segment_data.\n\nProblem:\n- segment_data field (bytes 40-194) is raw 155-byte payload\n- Format depends on data_element_identifier (DEI)\n- Cannot parse without DEI spec\n\nSolution:\n- parsed_segment_data extension provides structured access\n- Lazy-loaded: Only parsed when accessed\n- DEI-driven: Parsing logic from dei/{DEI}.yaml\n- Fallback-safe: Returns raw data if DEI unknown\n\nParsing workflow:\n1. Extract DEI from data_element_identifier (e.g., '106')\n2. Normalize DEI: '001' → integer 1 → 'dei/01.yaml'\n3. Load DEI spec from schemas/dei/{normalized_dei}.yaml\n4. If found: Parse segment_data using DEI field definitions\n5. If not found: Return {data: segment_data} with warning\n\nType safety:\n- oneOf allows multiple DEI types\n- Runtime type determined by DEI value\n- Elixir: Use tagged union or protocol\n- TypeScript: Use discriminated union\n\nExample DEI specs:\n- DEI 106 → %DEI106BookingDesignator{booking_classes: [...]}\n- DEI 001 → %DEI001JointOperation{designator_1: ..., designator_2: ..., ...}\n- DEI 122 → %DEI122MealService{meal_codes: [...], notes: ...}\n- DEI 999 → %{data: \"<raw_data>\"} (unknown DEI fallback)\n\nBenefits:\n- Type-safe access to segment data\n- IDE autocomplete for known DEIs\n- Forward compatible with unknown DEIs\n- Lazy evaluation (performance)\n- Clear separation: raw (segment_data) vs parsed (parsed_segment_data)\n\nUsage:\n```elixir\n# Access raw data (always available)\nraw = segment.segment_data\n\n# Access parsed data (lazy-loaded, DEI-specific)\nparsed = segment.parsed_segment_data\n\ncase parsed do\n  %DEI106BookingDesignator{booking_classes: classes} ->\n    # Type-safe access to booking classes\n    Enum.each(classes, &process_class/1)\n  \n  %{data: raw_data} ->\n    # Unknown DEI, handle raw data\n    Logger.warn(\"Unknown DEI, raw data: #{raw_data}\")\nend\n```"
+    }
+  ],
+  "training": {
+    "examples": [
+      {
+        "@type": "TrainingExample",
+        "id": "example_rt4_dei106_booking_classes",
+        "title": "RT4 with DEI 106 (Booking Designator) for Brisbane to Bali flight",
+        "encoding": "ASCII",
+        "rawRecord": "4 XX  0450101J              AB106BNEDPSJCDZYBWHKLREONVPQTISFUMAGX                                                                                                                                 000004",
+        "decoded": {
+          "record_type": "4",
+          "operational_suffix": " ",
+          "airline_designator": "XX ",
+          "flight_number": "0450",
+          "itinerary_variation_identifier": 1,
+          "leg_sequence_number": 1,
+          "service_type": "J",
+          "spare_1": "             ",
+          "itinerary_variation_identifier_overflow": " ",
+          "board_point_indicator": "A",
+          "off_point_indicator": "B",
+          "data_element_identifier": "106",
+          "board_point": "BNE",
+          "off_point": "DPS",
+          "segment_data": "JCDZYBWHKLREONVPQTISFUMAGX                                                                                                                           ",
+          "record_serial_number": 4
+        },
+        "decodedJson": "{\n  \"record_type\": \"4\",\n  \"airline_designator\": \"XX\",\n  \"flight_number\": \"0450\",\n  \"itinerary_variation_identifier\": 1,\n  \"leg_sequence_number\": 1,\n  \"service_type\": \"J\",\n  \"board_point_indicator\": \"A\",\n  \"off_point_indicator\": \"B\",\n  \"data_element_identifier\": \"106\",\n  \"board_point\": \"BNE\",\n  \"off_point\": \"DPS\",\n  \"segment_data\": \"JCDZYBWHKLREONVPQTISFUMAGX\",\n  \"record_serial_number\": 4\n}",
+        "parsedSegmentData": {
+          "booking_classes": [
+            "J",
+            "C",
+            "D",
+            "Z",
+            "Y",
+            "B",
+            "W",
+            "H",
+            "K",
+            "L",
+            "R",
+            "E",
+            "O",
+            "N",
+            "V",
+            "P",
+            "Q",
+            "T",
+            "I",
+            "S",
+            "F",
+            "U",
+            "M",
+            "A",
+            "G",
+            "X"
+          ]
+        },
+        "linkedRt3": {
+          "airline_designator": "XX ",
+          "flight_number": "0450",
+          "itinerary_variation_identifier": 1,
+          "leg_sequence_number": 1,
+          "service_type": "J",
+          "departure_station": "BNE",
+          "arrival_station": "DPS"
+        },
+        "explanation": "This RT4 provides booking class information for Flight XX450 (Brisbane to Bali). DEI 106 indicates this is booking designator data. The segment_data field contains 26 one-character booking class codes (J, C, D, Z, Y, etc.) representing available booking classes for this flight leg. The board_point_indicator='A' and off_point_indicator='B' indicate this applies to the entire leg from BNE to DPS.",
+        "aiNotes": "TRAINING: DEI 106 - Booking Designator\n\nThis is one of the most common RT4 types in SSIM files.\n\nKey points:\n1. DEI 106 = Booking Designator (booking classes)\n2. segment_data contains sequential 1-char codes\n3. Each char represents a booking class (e.g., 'J'=Business, 'Y'=Economy)\n4. No delimiters between classes (packed sequential)\n5. Blank-padded to 155 bytes\n\nParsing logic:\n```elixir\ndef parse_dei_106(segment_data) do\n  segment_data\n  |> String.trim_trailing()  # Remove blank padding\n  |> String.graphemes()      # Split into characters\n  |> Enum.map(&{:booking_class, &1})\nend\n```\n\nBooking class hierarchy (typical):\n- Premium: J, C, D, Z (Business/First)\n- Full-fare Economy: Y, B\n- Discount Economy: W, H, K, L, M, etc.\n- Deep Discount: Q, T, V, etc.\n\nThis example shows 26 classes (full alphabet minus blanks).\n\nboard='A', off='B' means:\n- Apply to entire leg (all passengers BNE→DPS)\n- Not segment-specific\n\nLinking to RT3:\n- Same airline (XX), flight (0450), itinerary (01), leg (01), service (J)\n- RT3 defines routing (BNE→DPS)\n- RT4 adds booking classes for that routing"
+      },
+      {
+        "@type": "TrainingExample",
+        "id": "example_rt4_dei001_joint_operation",
+        "title": "RT4 with DEI 001 (Joint Operation) for code-share flight",
+        "encoding": "ASCII",
+        "rawRecord": "4 QF    001011J              AB001SYDLHRQF BA AA                                                                                                                                           000123",
+        "decoded": {
+          "record_type": "4",
+          "operational_suffix": " ",
+          "airline_designator": "QF ",
+          "flight_number": "   1",
+          "itinerary_variation_identifier": 1,
+          "leg_sequence_number": 1,
+          "service_type": "J",
+          "spare_1": "             ",
+          "itinerary_variation_identifier_overflow": " ",
+          "board_point_indicator": "A",
+          "off_point_indicator": "B",
+          "data_element_identifier": "001",
+          "board_point": "SYD",
+          "off_point": "LHR",
+          "segment_data": "QF BA AA                                                                                                                                           ",
+          "record_serial_number": 123
+        },
+        "decodedJson": "{\n  \"record_type\": \"4\",\n  \"airline_designator\": \"QF\",\n  \"flight_number\": \"1\",\n  \"itinerary_variation_identifier\": 1,\n  \"leg_sequence_number\": 1,\n  \"service_type\": \"J\",\n  \"board_point_indicator\": \"A\",\n  \"off_point_indicator\": \"B\",\n  \"data_element_identifier\": \"001\",\n  \"board_point\": \"SYD\",\n  \"off_point\": \"LHR\",\n  \"segment_data\": \"QF BA AA \",\n  \"record_serial_number\": 123\n}",
+        "parsedSegmentData": {
+          "designator_1": "QF ",
+          "designator_2": "BA ",
+          "designator_3": "AA ",
+          "joint_operation_partners": [
+            "QF",
+            "BA",
+            "AA"
+          ],
+          "description": "Joint operation between Qantas (QF), British Airways (BA), and American Airlines (AA) - oneworld alliance code-share"
+        },
+        "linkedRt3": {
+          "airline_designator": "QF ",
+          "flight_number": "   1",
+          "itinerary_variation_identifier": 1,
+          "leg_sequence_number": 1,
+          "service_type": "J",
+          "departure_station": "SYD",
+          "arrival_station": "LHR"
+        },
+        "explanation": "This RT4 indicates joint operation/code-share arrangement for QF1 (Qantas Flight 1, Sydney to London). DEI 001 identifies partner airlines. The segment_data contains three 3-character airline codes: 'QF ' (Qantas - operating carrier), 'BA ' (British Airways - partner), and 'AA ' (American Airlines - partner). This is typical for oneworld alliance flights where the same flight is sold under multiple airline codes.",
+        "aiNotes": "TRAINING: DEI 001 - Joint Operation Airline Designators\n\nCode-share and joint operation indicator.\n\nKey points:\n1. DEI 001 = Joint Operation (alliance/code-share partners)\n2. segment_data contains multiple 3-char airline codes\n3. Each code is 3 bytes (2-char code + blank, or 3-char code)\n4. First code typically = operating carrier\n5. Subsequent codes = marketing/partner carriers\n\nParsing logic:\n```elixir\ndef parse_dei_001(segment_data) do\n  segment_data\n  |> String.trim_trailing()           # Remove blank padding\n  |> String.match?(~r/.{3}/) |> then(&Regex.scan(~r/.{3}/, segment_data))\n  |> List.flatten()\n  |> Enum.map(&String.trim/1)\n  |> Enum.reject(&(&1 == \"\"))\nend\n```\n\nExample: 'QF BA AA '\n- Byte 0-2: 'QF ' = Qantas (operating carrier)\n- Byte 3-5: 'BA ' = British Airways (code-share partner)\n- Byte 6-8: 'AA ' = American Airlines (code-share partner)\n- Byte 9+: Blanks (no more partners)\n\nUse cases:\n1. Code-share flights (same flight, multiple flight numbers)\n2. Alliance partnerships (oneworld, Star Alliance, SkyTeam)\n3. Wet-lease operations (aircraft leased with crew)\n4. Joint ventures (revenue sharing agreements)\n\nQF1 example:\n- Operates as: QF1 (Qantas)\n- Also sold as: BA7301 (British Airways code-share)\n- Also sold as: AA7302 (American Airlines code-share)\n\nThis DEI tells systems:\n- All three airlines have commercial agreements\n- Passengers can book on any of the three\n- Operating carrier is typically first in list (QF)"
+      },
+      {
+        "@type": "TrainingExample",
+        "id": "example_rt4_segment_specific",
+        "title": "RT4 with segment-specific data (intermediate board/off points)",
+        "encoding": "ASCII",
+        "rawRecord": "4 QF    001021J              II106SINLHRFCDZYBWHKL                                                                                                                                            000456",
+        "decoded": {
+          "record_type": "4",
+          "operational_suffix": " ",
+          "airline_designator": "QF ",
+          "flight_number": "   1",
+          "itinerary_variation_identifier": 1,
+          "leg_sequence_number": 2,
+          "service_type": "J",
+          "spare_1": "             ",
+          "itinerary_variation_identifier_overflow": " ",
+          "board_point_indicator": "I",
+          "off_point_indicator": "I",
+          "data_element_identifier": "106",
+          "board_point": "SIN",
+          "off_point": "LHR",
+          "segment_data": "FCDZYBWHKL                                                                                                                                             ",
+          "record_serial_number": 456
+        },
+        "decodedJson": "{\n  \"record_type\": \"4\",\n  \"airline_designator\": \"QF\",\n  \"flight_number\": \"1\",\n  \"itinerary_variation_identifier\": 1,\n  \"leg_sequence_number\": 2,\n  \"service_type\": \"J\",\n  \"board_point_indicator\": \"I\",\n  \"off_point_indicator\": \"I\",\n  \"data_element_identifier\": \"106\",\n  \"board_point\": \"SIN\",\n  \"off_point\": \"LHR\",\n  \"segment_data\": \"FCDZYBWHKL\",\n  \"record_serial_number\": 456\n}",
+        "parsedSegmentData": {
+          "booking_classes": [
+            "F",
+            "C",
+            "D",
+            "Z",
+            "Y",
+            "B",
+            "W",
+            "H",
+            "K",
+            "L"
+          ],
+          "description": "Booking classes for Singapore to London segment only (leg 2 of multi-leg flight)"
+        },
+        "linkedRt3": {
+          "airline_designator": "QF ",
+          "flight_number": "   1",
+          "itinerary_variation_identifier": 1,
+          "leg_sequence_number": 2,
+          "service_type": "J",
+          "departure_station": "SIN",
+          "arrival_station": "LHR",
+          "comment": "This is leg 2 of QF1 (SYD→SIN→LHR). Leg 1 would be SYD→SIN."
+        },
+        "explanation": "This RT4 provides segment-specific booking classes for the Singapore to London portion of QF1. The board_point_indicator='I' and off_point_indicator='I' indicate this data applies only to the specific segment from SIN (Singapore) to LHR (London), not the entire flight. This is leg_sequence_number=2, meaning it's the second leg of a multi-leg flight. Different booking classes may be available on different legs due to varying demand, competition, or operational constraints.",
+        "aiNotes": "TRAINING: Segment-specific RT4 data\n\nIntermediate board/off points for multi-leg flights.\n\nKey points:\n1. board_point_indicator='I' = Intermediate board point (not leg origin)\n2. off_point_indicator='I' = Intermediate off point (not leg destination)\n3. 'I'+'I' combination = Specific segment within larger routing\n4. leg_sequence_number=2 = Second leg of multi-leg flight\n5. Different booking classes per segment\n\nScenario:\nQF1 routing: SYD→SIN→LHR (Sydney to London via Singapore)\n\nLeg structure:\n- Leg 1: SYD→SIN (leg_sequence_number=01)\n  - RT4 DEI 106: booking classes for SYD→SIN\n- Leg 2: SIN→LHR (leg_sequence_number=02) ← This RT4\n  - RT4 DEI 106: booking classes for SIN→LHR\n\nWhy segment-specific data?\n1. Different demand patterns (SIN→LHR more competitive)\n2. Different aircraft configurations per leg\n3. Different pricing strategies\n4. Operational constraints (weight, fuel, etc.)\n\nIndicator combinations:\n- 'A' + 'B' = Entire leg (origin → destination)\n- 'A' + 'I' = Origin → intermediate point\n- 'I' + 'B' = Intermediate → destination\n- 'I' + 'I' = Intermediate → intermediate ← This example\n\nValidation:\n- board_point='SIN' must be in RT3 routing (either departure or intermediate)\n- off_point='LHR' must be in RT3 routing (either arrival or intermediate)\n- For leg_sequence_number=2, SIN and LHR must be part of leg 2 routing\n\nBooking classes in this example:\n- 'F' = First class (added for SIN→LHR, may not exist on SYD→SIN)\n- 'C', 'D', 'Z' = Business (premium)\n- 'Y', 'B', 'W', 'H', 'K', 'L' = Economy (various discount levels)\n\nFewer classes than leg 1 example (10 vs 26) - segment-specific inventory."
+      }
+    ],
+    "notes": [
+      "RT4 records are highly dependent on DEI (Data Element Identifier) for interpretation",
+      "Always link RT4 to RT3 via composite key before processing",
+      "segment_data field is 155 bytes of raw data - requires DEI spec to parse",
+      "Multiple RT4s can exist for same RT3 (different DEIs)",
+      "RT4 ordering: off_point sequence → DEI sequence → record_serial_number",
+      "board_point_indicator and off_point_indicator determine segment applicability",
+      "Most common DEIs: 001 (Joint Operation), 010 (Aircraft Type), 106 (Booking), 109 (Meal Service), 111 (Operational Suffix), 122 (Meals/Service Note), 127 (Terminal), 503 (Traffic Restriction), 504 (Codeshare), 505 (E-ticket)",
+      "Unknown DEIs should not fail parsing - store raw data with warning",
+      "parsed_segment_data extension provides type-safe access to segment_data",
+      "RT4 is conditional - RT3 can exist without any RT4 records"
+    ]
+  },
+  "references": [
+    "IATA SSIM, March 2011 — 7.5.4 Segment Data Record (Record Type 4)",
+    "IATA SSIM, March 2011 — Chapter 2 (Data Element Identifiers)",
+    "IATA SSIM, March 2011 — Chapter 7 (Record Formats)"
+  ],
+  "implementationQuirks": [
+    "Validate fixed-length fields; pad/truncate to required byte offsets.",
+    "Enforce 200-byte fixed-length for RT1–RT5; pad with ASCII space (0x20).",
+    "Right-pad text fields, left-pad numeric fields; validate field ranges and allowed sets.",
+    "Record ordering: RT1 Header → [RT2 Carrier → RT3 Flight Leg(s) → RT4 Segment(s)]* → RT5 Trailer.",
+    "Multiple RT4s can reference same RT3 (different DEIs) - support one-to-many relationship.",
+    "DEI-based parsing: Load DEI spec from schemas/dei/{DEI}.yaml and parse segment_data accordingly.",
+    "Unknown DEI handling: Log warning, store raw segment_data, don't fail parsing (forward compatibility).",
+    "Zero-pad DEI normalization: '1' → '001', '15' → '015' when loading DEI specs.",
+    "board_point and off_point must validate against RT3 routing (with indicator logic).",
+    "segment_data is always 155 bytes, blank-padded - trim when parsing but preserve length when encoding.",
+    "If record serial number exceeds 999999, follow SSIM Chapter 2 rule — do not silently wrap; raise and apply documented overflow handling."
+  ],
+  "changelog": [
+    {
+      "version": "1.0.0",
+      "date": "2025-11-24",
+      "changes": [
+        "Initial release of Segment Data Record (RT4) specification",
+        "Standardized @type to RecordSpecification",
+        "Converted field positions from 1-based to 0-based indexing",
+        "Added sharedVocabulary reference to shared.vocabulary.jsonld",
+        "Added indexing note in conventions section"
+      ]
+    }
+  ]
+}

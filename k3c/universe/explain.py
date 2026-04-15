@@ -17,6 +17,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Callable
 
 from k3c.lang.compile import CompiledSpec
 from k3c.lang.eval import k3_eval
@@ -112,8 +113,6 @@ class ExplainResult:
 
 # ── explain() ────────────────────────────────────────────────────────────────
 
-
-from typing import Callable
 
 type _TransitionFn = Callable[[dict[str, object], dict[str, object]], dict[str, object]]
 
