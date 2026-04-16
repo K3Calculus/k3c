@@ -62,7 +62,17 @@ from k3c.spec.extract import (
 
 # -- Engine context and results ------------------------------------------------
 from k3c.engine.ctx import SpecCtx
-from k3c.engine.result import Impossible, Ok, StepResult, Violated, Why, WhyKind
+from k3c.engine.result import (
+    ErrorAction,
+    ErrorHandler,
+    Impossible,
+    Ok,
+    StepError,
+    StepResult,
+    Violated,
+    Why,
+    WhyKind,
+)
 from k3c.engine.step import TransitionFn, apply_step
 
 # -- IR: expressions -----------------------------------------------------------
@@ -147,7 +157,7 @@ from k3c.runtime.universe import ReduceAllResult, Universe
 from k3c.runtime.compose import Applyable, ComposedUniverse
 from k3c.runtime.embedded import EmbeddedRuntime, EmbeddedUniverse
 from k3c.runtime.isolate import IsolatedUniverse
-from k3c.runtime.parallel import ChunkSource, ParallelReduceResult, parallel_reduce
+from k3c.runtime.parallel import ChunkResult, ChunkSource, ParallelReduceResult, parallel_reduce
 from k3c.runtime.bridge import (
     BridgedUniverse,
     BridgeMode,
@@ -214,6 +224,9 @@ __all__ = [
     "Why",
     "WhyKind",
     "StepResult",
+    "StepError",
+    "ErrorAction",
+    "ErrorHandler",
     "TransitionFn",
     "apply_step",
     # Expressions
@@ -305,6 +318,7 @@ __all__ = [
     # Parallel
     "parallel_reduce",
     "ParallelReduceResult",
+    "ChunkResult",
     "ChunkSource",
     # Samsara (KC-3)
     "TraceRecord",

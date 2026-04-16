@@ -1,6 +1,6 @@
 # k3c — Kulkarni Calculus Python SDK
 
-> k3c v0.1.0 | Python >=3.12 | MIT License
+> k3c v0.2.0 | Python >=3.12 | MIT License
 > Homepage: https://k3c.dev | Repository: https://github.com/K3Calculus/k3c
 
 ## What k3c Is
@@ -366,6 +366,7 @@ result = u.apply(event)                  # one causal step -> StepResult
 result = u.reduce(events)               # fold, stops on first non-Ok
 result = u.reduce_all(events)           # skip Impossible, stop on Violated -> ReduceAllResult
 results = u.stream(events)              # yield each result, stop after Violated
+errors = u.stream_errors(events)        # yield only errors (StepError), skip Ok
 
 # Samsara (KC-3 replay)
 run = u.simulate(events)                # full trajectory collection -> RunResult
@@ -539,26 +540,101 @@ isolated = u.isolate()          # deep-copied, no shared references
 result = isolated.apply(event)  # independent from original u
 ```
 
-## Parallel Processing
+## Error Streaming
 
-Process chunks in parallel using derived specs.
+Every non-Ok result produces a `StepError` with full identity — which chunk, which offset, which event, which rule.
+
+### StepError
 
 ```python
-from k3c import parallel_reduce
+@dataclass(frozen=True)
+class StepError:
+    chunk_index: int                    # which chunk (0 for single universe)
+    offset: int                         # position within the event stream
+    result: Impossible | Violated       # the full result
+
+    why: Why                            # shortcut for result.why
+    is_violation: bool                  # True if Violated, False if Impossible
+```
+
+### ErrorAction — Client Controls Flow
+
+```python
+class ErrorAction(StrEnum):
+    SKIP = "skip"                       # skip this event, continue processing
+    ABORT_CHUNK = "abort_chunk"         # stop this chunk, others continue
+    ABORT_ALL = "abort_all"             # stop everything
+```
+
+### Universe.stream_errors()
+
+Stream only errors from a single universe. Ok results are consumed silently.
+
+```python
+# Default: skip Impossible, abort on Violated
+for error in u.stream_errors(events):
+    logger.warning(error.why.to_log_record())
+
+# Custom handler — client decides per error
+def handler(error: StepError) -> ErrorAction:
+    if error.is_violation:
+        alert(error.why.rule, error.why.message)
+        return ErrorAction.ABORT_ALL
+    log_skip(error.chunk_index, error.offset, error.why.event)
+    return ErrorAction.SKIP
+
+for error in u.stream_errors(events, on_error=handler):
+    process_error(error)
+```
+
+## Parallel Processing
+
+Process chunks in parallel using derived specs. Errors stream per-event with full identity.
+
+```python
+from k3c import parallel_reduce, ErrorAction, StepError
 
 specs = [unified_spec.slice(from_state=checkpoint, events=["RT3"]) for checkpoint in checkpoints]
+
+# With error callback — called per-event as errors happen
+def on_error(error: StepError) -> ErrorAction:
+    log(f"chunk={error.chunk_index} offset={error.offset} rule={error.why.rule}")
+    log(f"  event: {error.why.event}")
+    log(f"  state_before: {error.why.before}")
+    if error.is_violation:
+        return ErrorAction.ABORT_CHUNK
+    return ErrorAction.SKIP
 
 result = parallel_reduce(
     transition=fn,
     specs=specs,
-    chunks=chunks,      # list of event iterables
+    chunks=chunks,
     workers=4,
     hash_fn="blake3",
+    on_error=on_error,
 )
 
 result.passed          # bool
 result.states          # list[dict] — final states from passing chunks
-result.violations      # tuple[(chunk_idx, Violated), ...]
+result.errors          # tuple[StepError, ...] — all errors across all chunks
+result.violations      # tuple[StepError, ...] — only Violated errors
+result.impossible      # tuple[StepError, ...] — only Impossible errors
+result.chunk_results   # tuple[ChunkResult, ...] — per-chunk detail
+
+# Without on_error — defaults to skip Impossible, abort chunk on Violated
+result = parallel_reduce(transition=fn, specs=specs, chunks=chunks, workers=4)
+```
+
+### ChunkResult
+
+```python
+cr = result.chunk_results[0]
+cr.chunk_index     # int
+cr.processed       # int — successful steps
+cr.errors          # tuple[StepError, ...] — errors in this chunk
+cr.final_state     # dict | None
+cr.passed          # bool — no violations and not aborted
+cr.aborted         # bool
 ```
 
 ## Explain (Debugging)
@@ -709,6 +785,38 @@ why.to_dict()      # dict — full serialization
 why.to_prompt()    # str — AI agent feedback format
 why.to_log_record() # dict — OTel-compatible structured log
 ```
+
+## State Management — Keep State Small
+
+Universe state should be minimal — only what is needed for guards, invariants, and transitions. Do NOT accumulate large results in state. Instead, use **outputs** and **projections** for streaming results to consumers.
+
+```python
+# BAD — state grows unbounded
+def transition(state, event):
+    return {**state, "results": state["results"] + [event]}  # state bloats
+
+# GOOD — state tracks only what invariants need, outputs stream results
+spec = Spec(
+    name="processor",
+    state0={"count": 0, "last_status": "idle"},
+    outputs=(
+        Output(name="result", expr=Record((
+            ("event", EventField("type")),
+            ("value", EventField("value")),
+        ))),
+    ),
+    ...
+)
+
+# Consume outputs from Ok results
+for result in u.stream(events):
+    match result:
+        case Ok(outputs=outputs):
+            for out in outputs:
+                send_downstream(out)  # stream out, don't store
+```
+
+State is deep-copied on every step and hashed into the chain. Large state means slow hashing, slow isolation, and high memory usage. Outputs and projections are computed once and discarded — they don't accumulate.
 
 ## Determinism Rules
 
@@ -944,7 +1052,9 @@ from k3c import (
     ByteSlice, BitField, JsonPath, XmlPath, MapKey, FieldNum, AvroField, ColumnName, ColumnIdx,
     Computed, Switch, Identity, TextEncoding, DecodeIdentity, DecodeFields, DecodeDispatch,
     # Engine
-    SpecCtx, Ok, Impossible, Violated, Why, WhyKind, StepResult, TransitionFn, apply_step,
+    SpecCtx, Ok, Impossible, Violated, Why, WhyKind, StepResult,
+    StepError, ErrorAction, ErrorHandler,
+    TransitionFn, apply_step,
     # Expressions (all 43 nodes)
     Expr, LBool, LInt, LFloat, LStr, LList,
     Var, Field, Index, EventField, Actual, Intended,
@@ -966,7 +1076,7 @@ from k3c import (
     BridgedUniverse, BridgeMode, FallbackStrategy, RetryPolicy,
     EmbeddedRuntime, EmbeddedUniverse,
     IsolatedUniverse,
-    parallel_reduce, ParallelReduceResult, ChunkSource,
+    parallel_reduce, ParallelReduceResult, ChunkResult, ChunkSource,
     # Samsara (KC-3)
     TraceRecord, RunResult, ReplayResult, ReplayMismatch,
     # Explain

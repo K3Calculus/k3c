@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.0 (2026-04-16)
+
+### Features
+
+- **Error streaming**: `StepError` with full identity (chunk index, offset, event, state, rule)
+- **`ErrorAction`**: client controls flow per error (`SKIP`, `ABORT_CHUNK`, `ABORT_ALL`)
+- **`Universe.stream_errors()`**: yield only errors from a single universe
+- **`parallel_reduce` `on_error` callback**: per-event error streaming in parallel processing
+- **`ChunkResult`**: per-chunk detail with processed count, errors, and abort status
+
 ## v0.1.0 (2026-04-16)
 
 ### Features

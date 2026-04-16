@@ -21,7 +21,15 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Callable, cast
 
 from k3c.engine.ctx import SpecCtx
-from k3c.engine.result import Impossible, Ok, StepResult, Violated
+from k3c.engine.result import (
+    ErrorAction,
+    ErrorHandler,
+    Impossible,
+    Ok,
+    StepError,
+    StepResult,
+    Violated,
+)
 from k3c.engine.step import TransitionFn, apply_step
 from k3c.errors import K3WellFormednessError
 from k3c.ir.eval import k3_eval
@@ -201,6 +209,43 @@ class Universe:
             result = self.apply(event)
             yield result
             if isinstance(result, Violated):
+                return
+
+    def stream_errors(
+        self,
+        events: Iterable[object],
+        *,
+        on_error: ErrorHandler | None = None,
+    ) -> Iterator[StepError]:
+        """Yield only errors (Impossible/Violated) with full step identity.
+
+        Processes all events, yielding a StepError for each non-Ok result.
+        If on_error is provided, the client controls flow via ErrorAction.
+        Without on_error, Impossible events are skipped and Violated aborts.
+
+        Usage:
+            for error in u.stream_errors(events):
+                logger.warning(error.why.to_log_record())
+        """
+        for offset, event in enumerate(events):
+            result = self.apply(event)
+
+            if isinstance(result, Ok):
+                continue
+
+            step_error = StepError(chunk_index=0, offset=offset, result=result)
+            yield step_error
+
+            if on_error is not None:
+                action = on_error(step_error)
+            else:
+                action = (
+                    ErrorAction.ABORT_CHUNK
+                    if isinstance(result, Violated)
+                    else ErrorAction.SKIP
+                )
+
+            if action in (ErrorAction.ABORT_CHUNK, ErrorAction.ABORT_ALL):
                 return
 
     def reset(self) -> None:

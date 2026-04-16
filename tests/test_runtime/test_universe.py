@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from k3c.engine.result import Impossible, Ok, Violated
+from k3c.engine.result import ErrorAction, Impossible, Ok, StepError, Violated
 from k3c.errors import K3WellFormednessError
 from k3c.ir.expr import Always, CmpOp, Compare, EventField, Field, LInt, Var
 from k3c.runtime.universe import Universe
@@ -228,6 +228,77 @@ class TestReset:
         assert u.state["balance"] == 400
         u.reset()
         assert u.state["balance"] == 500
+
+
+class TestStreamErrors:
+    def test_yields_impossible(self):
+        u = _bank_universe()
+        events = [
+            {"type": "Deposit", "amount": 50},
+            {"type": "Withdraw", "amount": 300},  # rejected
+            {"type": "Deposit", "amount": 10},
+        ]
+        errors = list(u.stream_errors(events))
+        assert len(errors) == 1
+        assert isinstance(errors[0], StepError)
+        assert errors[0].offset == 1
+        assert errors[0].why.rule == "has_funds"
+        assert not errors[0].is_violation
+        # Processing continued past the Impossible
+        assert u.state["balance"] == 160  # 100 + 50 + 10
+
+    def test_aborts_on_violated_by_default(self):
+        u = _bank_universe()
+        events = [
+            {"type": "Deposit", "amount": 50},
+            {"type": "Deposit", "amount": -250},  # no guard on Deposit, balance goes -100
+            {"type": "Deposit", "amount": 10},  # should not be reached
+        ]
+        errors = list(u.stream_errors(events))
+        assert len(errors) == 1
+        assert errors[0].is_violation
+        assert errors[0].offset == 1
+
+    def test_on_error_controls_flow(self):
+        u = _bank_universe()
+        events = [
+            {"type": "Withdraw", "amount": 200},  # rejected
+            {"type": "Withdraw", "amount": 300},  # rejected
+            {"type": "Deposit", "amount": 10},
+        ]
+        errors = list(
+            u.stream_errors(events, on_error=lambda e: ErrorAction.SKIP)
+        )
+        assert len(errors) == 2
+        assert u.state["balance"] == 110
+
+    def test_on_error_abort_all(self):
+        u = _bank_universe()
+        events = [
+            {"type": "Withdraw", "amount": 200},  # rejected
+            {"type": "Deposit", "amount": 10},  # should not be reached
+        ]
+        errors = list(
+            u.stream_errors(events, on_error=lambda e: ErrorAction.ABORT_ALL)
+        )
+        assert len(errors) == 1
+        assert u.state["balance"] == 100  # no deposits processed
+
+    def test_error_carries_event_and_state(self):
+        u = _bank_universe()
+        u.apply({"type": "Deposit", "amount": 50})  # balance = 150
+        events = [{"type": "Withdraw", "amount": 200}]
+        errors = list(u.stream_errors(events))
+        assert len(errors) == 1
+        assert errors[0].why.event == {"type": "Withdraw", "amount": 200}
+        assert errors[0].why.before == {"balance": 150}
+
+    def test_no_errors_yields_nothing(self):
+        u = _bank_universe()
+        events = [{"type": "Deposit", "amount": 50}]
+        errors = list(u.stream_errors(events))
+        assert len(errors) == 0
+        assert u.state["balance"] == 150
 
 
 class TestRepr:

@@ -173,3 +173,45 @@ class Ok(Generic[T]):
 
 
 type StepResult[T] = Ok[T] | Impossible | Violated
+
+
+# -- Error streaming -----------------------------------------------------------
+
+
+class ErrorAction(StrEnum):
+    """Client decision on how to handle a step error."""
+
+    SKIP = "skip"  # skip this event, continue processing
+    ABORT_CHUNK = "abort_chunk"  # stop this chunk, others continue
+    ABORT_ALL = "abort_all"  # stop everything
+
+
+@dataclass(frozen=True)
+class StepError:
+    """Full error identity for a failed step.
+
+    Carries chunk context so errors from parallel_reduce can be traced
+    back to their source.
+    """
+
+    chunk_index: int
+    offset: int
+    result: Impossible | Violated
+
+    @property
+    def why(self) -> Why:
+        return self.result.why
+
+    @property
+    def is_violation(self) -> bool:
+        return isinstance(self.result, Violated)
+
+    def __repr__(self) -> str:
+        kind = "Violated" if self.is_violation else "Impossible"
+        return (
+            f"StepError(chunk={self.chunk_index}, offset={self.offset}, "
+            f"{kind}: {self.why.rule})"
+        )
+
+
+type ErrorHandler = Callable[[StepError], ErrorAction]

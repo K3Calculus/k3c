@@ -1,11 +1,26 @@
-"""Tests for k3c.runtime.parallel -- parallel_reduce."""
+"""Tests for k3c.runtime.parallel -- parallel_reduce and error streaming."""
 
 from __future__ import annotations
 
 import pytest
 
-from k3c.ir.expr import Always, CmpOp, Compare, Field, LBool, LInt, Var
-from k3c.runtime.parallel import ChunkSource, ParallelReduceResult, parallel_reduce
+from k3c.engine.result import ErrorAction, StepError
+from k3c.ir.expr import (
+    Always,
+    CmpOp,
+    Compare,
+    EventField,
+    Field,
+    LBool,
+    LInt,
+    Var,
+)
+from k3c.runtime.parallel import (
+    ChunkResult,
+    ChunkSource,
+    ParallelReduceResult,
+    parallel_reduce,
+)
 from k3c.spec.model import Maintain, Permit, Spec
 
 
@@ -14,6 +29,27 @@ def _counter_spec(start=0):
         name="counter",
         state0={"count": start},
         permits=(Permit(name="ok", when=LBool(True), on="Inc"),),
+        maintains=(
+            Maintain(
+                name="pos",
+                expr=Always(Compare(CmpOp.GE, Field(Var("state"), "count"), LInt(0))),
+            ),
+        ),
+    )
+
+
+def _guarded_spec(start=0):
+    """Counter that rejects increments above 100."""
+    return Spec(
+        name="guarded_counter",
+        state0={"count": start},
+        permits=(
+            Permit(
+                name="not_too_large",
+                when=Compare(CmpOp.LE, EventField("n"), LInt(100)),
+                on="Inc",
+            ),
+        ),
         maintains=(
             Maintain(
                 name="pos",
@@ -88,5 +124,164 @@ class TestParallelReduceResult:
         assert isinstance(result, ParallelReduceResult)
         assert result.passed is True
         assert result.total_processed == 2
-        assert result.total_skipped == 0
+        assert len(result.errors) == 0
         assert len(result.states) == 2
+
+
+class TestErrorStreaming:
+    def test_impossible_yields_step_error(self):
+        """Guard rejection produces StepError with correct identity."""
+        specs = [_guarded_spec(0)]
+        chunks = [
+            [
+                {"type": "Inc", "n": 5},
+                {"type": "Inc", "n": 200},  # rejected
+                {"type": "Inc", "n": 3},
+            ]
+        ]
+        result = parallel_reduce(
+            transition=_counter_t, specs=specs, chunks=chunks, workers=1
+        )
+        assert result.passed  # Impossible doesn't fail the chunk
+        assert result.total_processed == 2
+        assert len(result.errors) == 1
+        assert len(result.impossible) == 1
+        assert len(result.violations) == 0
+
+        err = result.errors[0]
+        assert err.chunk_index == 0
+        assert err.offset == 1
+        assert err.why.rule == "not_too_large"
+        assert err.why.event == {"type": "Inc", "n": 200}
+        assert not err.is_violation
+
+    def test_violated_yields_step_error_and_aborts(self):
+        """Invariant violation produces StepError and aborts chunk by default."""
+        specs = [_counter_spec(0)]
+        chunks = [
+            [
+                {"type": "Inc", "n": 5},
+                {"type": "Inc", "n": -100},  # violates pos invariant
+                {"type": "Inc", "n": 1},  # should not be reached
+            ]
+        ]
+        result = parallel_reduce(
+            transition=_counter_t, specs=specs, chunks=chunks, workers=1
+        )
+        assert not result.passed
+        assert len(result.violations) == 1
+
+        err = result.violations[0]
+        assert err.chunk_index == 0
+        assert err.offset == 1
+        assert err.is_violation
+        assert err.why.rule == "pos"
+        assert err.why.before == {"count": 5}
+        assert err.why.after == {"count": -95}
+        assert err.why.event == {"type": "Inc", "n": -100}
+
+    def test_on_error_skip_all(self):
+        """Client can skip all errors including violations."""
+        specs = [_counter_spec(0)]
+        chunks = [
+            [
+                {"type": "Inc", "n": 5},
+                {"type": "Inc", "n": -100},  # violation -- but client skips
+                {"type": "Inc", "n": 1},  # should still be reached
+            ]
+        ]
+
+        errors_seen: list[StepError] = []
+
+        def handler(e: StepError) -> ErrorAction:
+            errors_seen.append(e)
+            return ErrorAction.SKIP
+
+        res = parallel_reduce(
+            transition=_counter_t,
+            specs=specs,
+            chunks=chunks,
+            workers=1,
+            on_error=handler,
+        )
+        # Client chose SKIP so chunk continues, but violation is recorded
+        assert len(errors_seen) == 1
+        assert errors_seen[0].is_violation
+        assert res.total_processed == 2
+
+    def test_on_error_abort_all(self):
+        """Client can abort all chunks from any error."""
+        specs = [_guarded_spec(0)]
+        chunks = [
+            [
+                {"type": "Inc", "n": 200},  # rejected
+                {"type": "Inc", "n": 5},  # should not be reached
+            ]
+        ]
+
+        def handler(e: StepError) -> ErrorAction:
+            return ErrorAction.ABORT_ALL
+
+        res = parallel_reduce(
+            transition=_counter_t,
+            specs=specs,
+            chunks=chunks,
+            workers=1,
+            on_error=handler,
+        )
+        assert res.total_processed == 0
+        assert len(res.errors) == 1
+
+    def test_multi_chunk_error_identity(self):
+        """Errors carry correct chunk_index across multiple chunks."""
+        specs = [_guarded_spec(0), _guarded_spec(0)]
+        chunks = [
+            [{"type": "Inc", "n": 5}, {"type": "Inc", "n": 200}],  # chunk 0, offset 1
+            [{"type": "Inc", "n": 300}, {"type": "Inc", "n": 3}],  # chunk 1, offset 0
+        ]
+        result = parallel_reduce(
+            transition=_counter_t, specs=specs, chunks=chunks, workers=1
+        )
+        assert result.total_processed == 2  # 1 per chunk (rejected events don't count)
+        assert len(result.errors) == 2
+
+        by_chunk = {e.chunk_index: e for e in result.errors}
+        assert by_chunk[0].offset == 1
+        assert by_chunk[0].why.event["n"] == 200
+        assert by_chunk[1].offset == 0
+        assert by_chunk[1].why.event["n"] == 300
+
+    def test_chunk_result_properties(self):
+        """ChunkResult carries per-chunk detail."""
+        specs = [_guarded_spec(0)]
+        chunks = [
+            [
+                {"type": "Inc", "n": 1},
+                {"type": "Inc", "n": 200},
+                {"type": "Inc", "n": 2},
+            ]
+        ]
+        result = parallel_reduce(
+            transition=_counter_t, specs=specs, chunks=chunks, workers=1
+        )
+        cr = result.chunk_results[0]
+        assert isinstance(cr, ChunkResult)
+        assert cr.chunk_index == 0
+        assert cr.processed == 2
+        assert len(cr.errors) == 1
+        assert cr.passed  # Impossible doesn't fail the chunk
+        assert cr.final_state["count"] == 3
+
+    def test_step_error_repr(self):
+        """StepError has a useful repr."""
+        specs = [_guarded_spec(0)]
+        chunks = [[{"type": "Inc", "n": 200}]]
+        result = parallel_reduce(
+            transition=_counter_t, specs=specs, chunks=chunks, workers=1
+        )
+        err = result.errors[0]
+        r = repr(err)
+        assert "chunk=0" in r
+        assert "offset=0" in r
+        assert "Impossible" in r
+        assert "not_too_large" in r
