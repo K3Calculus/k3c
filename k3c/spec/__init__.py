@@ -46,7 +46,13 @@ from k3c.spec.model import (
     Permit,
     Projection,
     Require,
+    Severity,
     Spec,
+    Validate,
+)
+from k3c.spec.serde import (
+    spec_from_dict,
+    spec_to_dict,
 )
 
 __all__ = [
@@ -83,4 +89,8 @@ __all__ = [
     "DecodeDispatch",
     "run_extractor",
     "run_decode",
+    "Severity",
+    "Validate",
+    "spec_to_dict",
+    "spec_from_dict",
 ]

@@ -178,6 +178,12 @@ from k3c.engine.explain import ExplainResult
 # -- Testing -------------------------------------------------------------------
 from k3c.testing.fuzz import FuzzReport, FuzzViolation
 
+# -- Serde ---------------------------------------------------------------------
+from k3c.ir.serde import from_dict as expr_from_dict
+from k3c.ir.serde import to_dict as expr_to_dict
+from k3c.ir.serde import type_from_dict, type_to_dict
+from k3c.spec.serde import spec_from_dict, spec_to_dict
+
 # -- Emit ----------------------------------------------------------------------
 from k3c.emit import to_python, to_sql, to_typescript
 
@@ -342,6 +348,13 @@ __all__ = [
     # Testing
     "FuzzReport",
     "FuzzViolation",
+    # Serde
+    "expr_to_dict",
+    "expr_from_dict",
+    "type_to_dict",
+    "type_from_dict",
+    "spec_to_dict",
+    "spec_from_dict",
     # Emit
     "to_typescript",
     "to_sql",

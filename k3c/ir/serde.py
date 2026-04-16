@@ -18,8 +18,10 @@ from k3c.ir.expr import (
     Abs,
     Actual,
     After,
+    AllOf,
     Always,
     And,
+    AnyOf,
     Arith,
     ArithOp,
     Before,
@@ -38,6 +40,7 @@ from k3c.ir.expr import (
     ForAll,
     If,
     Implies,
+    In,
     Index,
     Intended,
     IsSome,
@@ -137,6 +140,12 @@ def to_dict(node: Expr) -> dict[str, object]:
             }
         case Implies(left=le, right=re):
             return {"type": "Implies", "left": to_dict(le), "right": to_dict(re)}
+        case AllOf(exprs=exprs):
+            return {"type": "AllOf", "exprs": [to_dict(e) for e in exprs]}
+        case AnyOf(exprs=exprs):
+            return {"type": "AnyOf", "exprs": [to_dict(e) for e in exprs]}
+        case In(expr=e, values=vals):
+            return {"type": "In", "expr": to_dict(e), "values": [to_dict(v) for v in vals]}
 
         # Comparison and arithmetic
         case Compare(op=op, left=le, right=re):
@@ -440,6 +449,18 @@ def _from_dict_compound(node_type: str, data: dict[str, object]) -> Expr | None:
             return Described(
                 description=_str_field(data, "Described", "description"),
                 expr=from_dict(_dict_field(data, "Described", "expr")),
+            )
+        case "AllOf":
+            exprs = _list_field(data, "AllOf", "exprs")
+            return AllOf(exprs=tuple(from_dict(_ensure_dict(e, "AllOf")) for e in exprs))
+        case "AnyOf":
+            exprs = _list_field(data, "AnyOf", "exprs")
+            return AnyOf(exprs=tuple(from_dict(_ensure_dict(e, "AnyOf")) for e in exprs))
+        case "In":
+            vals = _list_field(data, "In", "values")
+            return In(
+                expr=from_dict(_dict_field(data, "In", "expr")),
+                values=tuple(from_dict(_ensure_dict(v, "In")) for v in vals),
             )
         case _:
             return None

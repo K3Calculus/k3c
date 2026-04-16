@@ -1110,19 +1110,33 @@ for session in sessions:
 
 ## Serialization
 
-Specs and expressions round-trip to JSON.
+Specs, expressions, and types round-trip to JSON.
 
 ```python
-from k3c.ir.serde import to_dict, from_dict, type_to_dict, type_from_dict
+from k3c import (
+    expr_to_dict, expr_from_dict,   # Expr <-> dict
+    type_to_dict, type_from_dict,   # ExprType <-> dict
+    spec_to_dict, spec_from_dict,   # Spec <-> dict (full spec with all clauses)
+)
 
 # Expression round-trip
-d = to_dict(Compare(CmpOp.GE, Field(Var("state"), "x"), LInt(0)))
-expr = from_dict(d)
+d = expr_to_dict(Compare(CmpOp.GE, Field(Var("state"), "x"), LInt(0)))
+expr = expr_from_dict(d)
 
 # Type round-trip
 d = type_to_dict(TRecord(fields={"x": TInt(), "y": TString()}))
 t = type_from_dict(d)
+
+# Full Spec round-trip (includes Permits, Maintains, Validates, decode plans, etc.)
+d = spec_to_dict(spec)
+json_str = json.dumps(d, indent=2)   # JSON-ready
+spec = spec_from_dict(json.loads(json_str))
 ```
+
+`spec_to_dict` / `spec_from_dict` covers all clause types: Permit, Require,
+Maintain (with severity), Validate (with field/constraint), Projection, Output,
+Korrelator, FieldDef, all Extractor types, and all DecodePlan types.
+Defaults are omitted from output (severity="error", protocol_start="__start__", etc.).
 
 ## Hash Chain
 
@@ -1183,6 +1197,9 @@ from k3c import (
     ExplainResult,
     # Testing
     FuzzReport, FuzzViolation,
+    # Serde
+    expr_to_dict, expr_from_dict, type_to_dict, type_from_dict,
+    spec_to_dict, spec_from_dict,
     # Emit
     to_typescript, to_sql, to_python,
     # Errors
