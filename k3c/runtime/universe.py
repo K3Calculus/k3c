@@ -29,6 +29,7 @@ from k3c.engine.result import (
     StepError,
     StepResult,
     Violated,
+    Warning,
 )
 from k3c.engine.step import TransitionFn, apply_step
 from k3c.errors import K3WellFormednessError
@@ -163,19 +164,19 @@ class Universe:
             compiled=self._compiled,
             transition=self._transition,
         )
-        if isinstance(result, Ok):
+        if isinstance(result, (Ok, Warning)):
             self._state = cast("dict[str, object]", result.state)
             self._ctx = result.ctx
         return result
 
     def reduce(self, events: Iterable[object]) -> StepResult[dict[str, object]]:
-        """Fold event stream. Stops on first non-Ok."""
+        """Fold event stream. Stops on first non-Ok/Warning."""
         result: StepResult[dict[str, object]] = Ok(
             state=self._state, ctx=self._ctx, step_hash=""
         )
         for event in events:
             result = self.apply(event)
-            if not isinstance(result, Ok):
+            if not isinstance(result, (Ok, Warning)):
                 return result
         return result
 
@@ -189,7 +190,7 @@ class Universe:
 
         for i, event in enumerate(events):
             result = self.apply(event)
-            if isinstance(result, Ok):
+            if isinstance(result, (Ok, Warning)):
                 processed += 1
                 last_ok = result
             elif isinstance(result, Impossible):

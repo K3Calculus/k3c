@@ -74,6 +74,13 @@ class Require:
     transition: Expr
 
 
+class Severity(StrEnum):
+    """Maintain clause severity level."""
+
+    ERROR = "error"  # Violated — stops processing
+    WARNING = "warning"  # Warning — continues with causal record
+
+
 @dataclass(frozen=True)
 class Maintain:
     """An invariant/liveness clause -- routed to N or L by structure.
@@ -81,12 +88,14 @@ class Maintain:
     name: human-readable identifier
     expr: Always(phi) -> N, Always(Within(phi,n)) -> Ctx+N,
           Always(Eventually(phi)) -> L
+    severity: "error" (default, produces Violated) or "warning" (produces Warning)
 
     Routing is done by compile.py, not here.
     """
 
     name: str
     expr: Expr
+    severity: Severity = Severity.ERROR
 
 
 @dataclass(frozen=True)
@@ -115,6 +124,29 @@ class Output:
     name: str
     expr: Expr
     on: str | None = None
+
+
+@dataclass(frozen=True)
+class Validate:
+    """Event-scoped validation — checked after transition, before invariants.
+
+    Unlike Maintain (which checks state invariants), Validate checks the event
+    itself against the current state. Has access to both EventField and state.
+
+    name: human-readable identifier
+    on: event type filter (required — scopes to specific event types)
+    check: Expr that must evaluate to Some(True). Has access to state + event.
+    severity: "error" (produces Violated) or "warning" (produces Warning)
+    field: optional field name for structured error detail
+    constraint: optional constraint description for structured error detail
+    """
+
+    name: str
+    on: str
+    check: Expr
+    severity: Severity = Severity.ERROR
+    field: str | None = None
+    constraint: str | None = None
 
 
 class CompareMode(StrEnum):
@@ -167,6 +199,7 @@ class Spec:
     permits: tuple[Permit, ...] = ()
     requires: tuple[Require, ...] = ()
     maintains: tuple[Maintain, ...] = ()
+    validates: tuple[Validate, ...] = ()
 
     # P -- Projections (declarative)
     projections: tuple[Projection, ...] = ()
@@ -207,6 +240,7 @@ class Spec:
             permits=active_permits,
             requires=self.requires,
             maintains=self.maintains,
+            validates=self.validates,
             projections=self.projections,
             outputs=self.outputs,
             korrelator=self.korrelator,

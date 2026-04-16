@@ -24,7 +24,9 @@ from k3c.spec.model import (
     Permit,
     Projection,
     Require,
+    Severity,
     Spec,
+    Validate,
 )
 
 
@@ -48,6 +50,7 @@ class ClassifiedMaintain:
     expr: Expr
     original: Expr
     n: int | None = None
+    severity: Severity = Severity.ERROR
 
 
 def _find_temporal(expr: Expr) -> Within | Eventually | Until | None:
@@ -78,6 +81,7 @@ def classify_maintain(clause: Maintain) -> ClassifiedMaintain:
             name=clause.name,
             expr=inner,
             original=clause.expr,
+            severity=clause.severity,
         )
 
     if isinstance(temporal, Within):
@@ -87,6 +91,7 @@ def classify_maintain(clause: Maintain) -> ClassifiedMaintain:
             expr=temporal.expr,
             original=clause.expr,
             n=temporal.n,
+            severity=clause.severity,
         )
 
     if isinstance(temporal, Eventually):
@@ -95,6 +100,7 @@ def classify_maintain(clause: Maintain) -> ClassifiedMaintain:
             name=clause.name,
             expr=temporal.expr,
             original=clause.expr,
+            severity=clause.severity,
         )
 
     # Until
@@ -103,6 +109,7 @@ def classify_maintain(clause: Maintain) -> ClassifiedMaintain:
         name=clause.name,
         expr=temporal.right,
         original=clause.expr,
+        severity=clause.severity,
     )
 
 
@@ -141,6 +148,9 @@ class CompiledSpec:
     # Outputs (declarative)
     outputs: tuple[Output, ...]
 
+    # V -- Validates (event-scoped)
+    validates: dict[str, tuple[Validate, ...]]
+
     # K -- Korrelator (declarative)
     korrelator: Korrelator | None
 
@@ -169,6 +179,12 @@ def compile_spec(spec: Spec, *, hash_fn: str = "sha256") -> CompiledSpec:
     for req in spec.requires:
         requires_index[req.on] = req
 
+    # Index validates by event type for O(1) lookup
+    validates_index: dict[str, list[Validate]] = {}
+    for v in spec.validates:
+        validates_index.setdefault(v.on, []).append(v)
+    validates_frozen = {k: tuple(v) for k, v in validates_index.items()}
+
     return CompiledSpec(
         name=spec.name,
         state0=spec.state0,
@@ -178,6 +194,7 @@ def compile_spec(spec: Spec, *, hash_fn: str = "sha256") -> CompiledSpec:
         safety=safety,
         bounded=bounded,
         liveness=liveness,
+        validates=validates_frozen,
         projections=spec.projections,
         outputs=spec.outputs,
         korrelator=spec.korrelator,

@@ -434,6 +434,31 @@ class Implies:
     right: Expr
 
 
+# -- Variadic logic ------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class AllOf:
+    """Variadic AND: all exprs must be true. Short-circuits on False/Nothing."""
+
+    exprs: tuple[Expr, ...]
+
+
+@dataclass(frozen=True)
+class AnyOf:
+    """Variadic OR: at least one expr must be true. Short-circuits on True."""
+
+    exprs: tuple[Expr, ...]
+
+
+@dataclass(frozen=True)
+class In:
+    """Membership test: expr in values. Sugar for AnyOf(Compare(EQ, expr, v) for v in values)."""
+
+    expr: Expr
+    values: tuple[Expr, ...]
+
+
 # -- Expr discriminated union --------------------------------------------------
 
 type Expr = (
@@ -456,6 +481,9 @@ type Expr = (
     | Not
     | If
     | Implies
+    | AllOf
+    | AnyOf
+    | In
     # Comparison and arithmetic
     | Compare
     | Arith

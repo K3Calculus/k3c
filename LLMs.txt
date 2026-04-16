@@ -1,6 +1,6 @@
 # k3c — Kulkarni Calculus Python SDK
 
-> k3c v0.2.1 | Python >=3.12 | MIT License
+> k3c v0.3.0 | Python >=3.12 | MIT License
 > Homepage: https://k3c.dev | Repository: https://github.com/K3Calculus/k3c
 
 ## What k3c Is
@@ -66,6 +66,7 @@ apply() is total — it never raises. It always returns one of:
 | Result | Meaning | Bug? |
 |--------|---------|------|
 | `Ok(state, ctx, step_hash)` | Guards passed, invariants held | No |
+| `Warning(state, ctx, step_hash, why)` | Non-fatal issue, state advances | No |
 | `Impossible(why)` | Guard rejected event. State unchanged | No |
 | `Violated(why)` | Invariant broken. Implementation diverged | **Yes** |
 
@@ -177,8 +178,12 @@ The compiler routes maintain clauses by structure:
 | `Always(Eventually(phi))` | **L** (liveness) | Unbounded temporal obligation |
 
 ```python
-# Safety: balance must never go negative
+# Safety: balance must never go negative (error = Violated)
 Maintain(name="non_negative", expr=Always(Compare(CmpOp.GE, Field(Var("state"), "balance"), LInt(0))))
+
+# Warning severity: flags concern but continues processing (Warning result)
+Maintain(name="prefer_positive", expr=Always(Compare(CmpOp.GT, Field(Var("state"), "balance"), LInt(0))),
+         severity=Severity.WARNING)
 
 # Bounded liveness: must settle within 5 steps
 Maintain(name="settle_fast", expr=Always(Within(Compare(CmpOp.EQ, Field(Var("state"), "settled"), LBool(True)), 5)))
@@ -186,6 +191,47 @@ Maintain(name="settle_fast", expr=Always(Within(Compare(CmpOp.EQ, Field(Var("sta
 # Liveness: must eventually reach terminal state
 Maintain(name="terminates", expr=Always(Eventually(Compare(CmpOp.EQ, Field(Var("state"), "done"), LBool(True)))))
 ```
+
+### Validate (Event-Scoped Validation)
+
+Event-scoped checks with access to both state and EventField. Scoped to specific
+event types via `on=`. Supports structured error detail and severity levels.
+
+```python
+# Check event field value
+Validate(name="valid_airport", on="RT3",
+         check=Matches(EventField("departure_station"), r"^[A-Z]{3}$"),
+         field="departure_station", constraint="^[A-Z]{3}$")
+
+# Check event field against allowed values using In
+Validate(name="valid_phase", on="SetPhase",
+         check=In(EventField("phase"), (LStr("idle"), LStr("active"), LStr("done"))),
+         field="phase", constraint="one of: idle, active, done")
+
+# Warning severity — flags but continues
+Validate(name="large_amount", on="Withdraw",
+         check=Compare(CmpOp.LE, EventField("amount"), LInt(10000)),
+         severity=Severity.WARNING)
+
+# Cross-field: event field vs state
+Validate(name="airline_matches_carrier", on="RT4",
+         check=Compare(CmpOp.EQ, EventField("airline"), Field(Var("state"), "carrier")),
+         field="airline")
+```
+
+### Warning Result Type
+
+```python
+match u.apply(event):
+    case Ok(state=s):        ...  # success
+    case Warning(state=s, why=w):  # non-fatal issue, state still advances
+        log(w.rule, w.message)
+    case Impossible(why=w):  ...  # guard rejected
+    case Violated(why=w):    ...  # invariant broken
+```
+
+Warning is produced by `Maintain(severity=Severity.WARNING)` or
+`Validate(severity=Severity.WARNING)`. State advances, processing continues.
 
 ### Projection (Derived View)
 
@@ -260,6 +306,9 @@ Or(left, right)                # short-circuits on True/Nothing
 Not(expr)
 If(cond, then, else_)          # ternary
 Implies(left, right)           # left => right
+AllOf(exprs=(e1, e2, e3))      # variadic AND — replaces nested And chains
+AnyOf(exprs=(e1, e2, e3))      # variadic OR — replaces nested Or chains
+In(expr, values=(v1, v2, v3))  # membership test — expr in {v1, v2, v3}
 ```
 
 ### Comparison
@@ -729,6 +778,9 @@ DecodeDispatch(
         ("1", header_decode_plan),
         ("2", carrier_decode_plan),
     ),
+    default="skip",      # unmatched -> Impossible (clean rejection)
+    # default=fallback_plan  # or use a fallback DecodePlan
+    # default=None           # legacy: pass through with __discriminant__
 )
 ```
 
@@ -1066,18 +1118,19 @@ u = Universe(spec=spec, transition=fn, hash_fn="blake3")   # ~4-6x faster (requi
 ```python
 from k3c import (
     # Spec model
-    Spec, FieldDef, Permit, Require, Maintain, Projection, Output, Korrelator, CompareMode,
+    Spec, FieldDef, Permit, Require, Maintain, Validate, Severity,
+    Projection, Output, Korrelator, CompareMode,
     # Extractors
     ByteSlice, BitField, JsonPath, XmlPath, MapKey, FieldNum, AvroField, ColumnName, ColumnIdx,
     Computed, Switch, Identity, TextEncoding, DecodeIdentity, DecodeFields, DecodeDispatch,
     # Engine
-    SpecCtx, Ok, Impossible, Violated, Why, WhyKind, StepResult,
+    SpecCtx, Ok, Impossible, Violated, Warning, Why, WhyKind, StepResult,
     StepError, ErrorAction, ErrorHandler,
     TransitionFn, apply_step,
     # Expressions (all 43 nodes)
     Expr, LBool, LInt, LFloat, LStr, LList,
     Var, Field, Index, EventField, Actual, Intended,
-    And, Or, Not, If, Implies,
+    And, Or, Not, If, Implies, AllOf, AnyOf, In,
     Compare, CmpOp, Arith, ArithOp, Mod, Negate, Abs, Min, Max,
     IsSome, UnwrapOr,
     ForAll, Exists, Length, Contains, Map, Filter, Fold,

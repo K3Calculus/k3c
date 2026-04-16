@@ -18,8 +18,10 @@ from k3c.ir.expr import (
     Abs,
     Actual,
     After,
+    AllOf,
     Always,
     And,
+    AnyOf,
     Arith,
     ArithOp,
     Before,
@@ -38,6 +40,7 @@ from k3c.ir.expr import (
     ForAll,
     If,
     Implies,
+    In,
     Index,
     Intended,
     IsSome,
@@ -191,6 +194,42 @@ def _eval_implies(le: Expr, re: Expr, ctx: dict[str, object], sh: str) -> _Res:
     if checked.val is False:
         return Some(True)
     return k3_eval(re, ctx, sh)
+
+
+def _eval_all_of(exprs: tuple[Expr, ...], ctx: dict[str, object], sh: str) -> _Res:
+    """Variadic AND. Short-circuits on False or Nothing."""
+    for e in exprs:
+        result = k3_eval(e, ctx, sh)
+        if isinstance(result, Nothing):
+            return result
+        if result.val is False:
+            return Some(False)
+    return Some(True)
+
+
+def _eval_any_of(exprs: tuple[Expr, ...], ctx: dict[str, object], sh: str) -> _Res:
+    """Variadic OR. Short-circuits on True."""
+    for e in exprs:
+        result = k3_eval(e, ctx, sh)
+        if isinstance(result, Nothing):
+            return result
+        if result.val is True:
+            return Some(True)
+    return Some(False)
+
+
+def _eval_in(expr: Expr, vals: tuple[Expr, ...], ctx: dict[str, object], sh: str) -> _Res:
+    """Membership test: expr in values."""
+    target = k3_eval(expr, ctx, sh)
+    if isinstance(target, Nothing):
+        return target
+    for v in vals:
+        vr = k3_eval(v, ctx, sh)
+        if isinstance(vr, Nothing):
+            continue
+        if target.val == vr.val:
+            return Some(True)
+    return Some(False)
 
 
 def _eval_binary(fn: Any, le: Expr, re: Expr, ctx: dict[str, object], sh: str) -> _Res:
@@ -512,6 +551,12 @@ def k3_eval(
             return _eval_if(c, t, e, ctx, step_hash)
         case Implies(left=le, right=re):
             return _eval_implies(le, re, ctx, step_hash)
+        case AllOf(exprs=exprs):
+            return _eval_all_of(exprs, ctx, step_hash)
+        case AnyOf(exprs=exprs):
+            return _eval_any_of(exprs, ctx, step_hash)
+        case In(expr=e, values=vals):
+            return _eval_in(e, vals, ctx, step_hash)
         case Compare(op=op, left=le, right=re):
             fn = _CMP_OPS.get(op)
             if fn is None:

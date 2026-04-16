@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.0 (2026-04-16)
+
+### Features
+
+- **`Validate` clause**: event-scoped validation with `on=` filtering, `EventField` access, structured error detail (`field`, `constraint`), and severity levels
+- **`Warning` result type**: non-fatal invariant issues — state advances, processing continues, causal record preserved
+- **`Severity` on `Maintain`**: `Severity.ERROR` (Violated, default) or `Severity.WARNING` (Warning)
+- **`AllOf` / `AnyOf`**: variadic AND/OR expressions — replaces nested `And`/`Or` chains
+- **`In` expression**: membership test — `In(expr, (v1, v2, v3))` replaces verbose `Or(Compare(...), ...)`
+- **`DecodeDispatch` default**: `default="skip"` produces `Impossible` for unmatched discriminants; `default=plan` uses a fallback decode plan
+- Synchronous bridge returns target `Ok` with merged outputs and namespaced projections
+
 ## v0.2.1 (2026-04-16)
 
 ### Features

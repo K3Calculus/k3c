@@ -165,10 +165,17 @@ class DecodeFields:
 
 @dataclass(frozen=True)
 class DecodeDispatch:
-    """Decode by dispatching on a discriminant value."""
+    """Decode by dispatching on a discriminant value.
+
+    default: if set to "skip", unmatched events produce {"__skip__": True}
+             which the engine can use to produce Impossible.
+             If set to a DecodePlan, that plan is used for unmatched events.
+             If None (default), unmatched events pass through with __discriminant__.
+    """
 
     discriminant: Extractor
     cases: tuple[tuple[object, DecodePlan], ...]
+    default: DecodePlan | str | None = None
 
 
 type DecodePlan = DecodeIdentity | DecodeFields | DecodeDispatch
@@ -289,12 +296,17 @@ def run_decode(plan: DecodePlan | None, raw: object) -> dict[str, object]:
                 result[name] = run_extractor(extractor, raw)
             return result
 
-        case DecodeDispatch(discriminant=disc, cases=cases):
+        case DecodeDispatch(discriminant=disc, cases=cases, default=default):
             disc_val = run_extractor(disc, raw)
             for case_val, sub_plan in cases:
                 if disc_val == case_val:
                     return run_decode(sub_plan, raw)
-            # No matching case -- return raw with discriminant
+            # No matching case -- apply default strategy
+            if default == "skip":
+                return {"__skip__": True, "__discriminant__": disc_val}
+            if default is not None and not isinstance(default, str):
+                return run_decode(default, raw)
+            # Legacy: pass through with discriminant
             result = {"__discriminant__": disc_val}
             if isinstance(raw, dict):
                 result.update(cast("dict[str, object]", raw))

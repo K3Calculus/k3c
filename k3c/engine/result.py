@@ -172,7 +172,39 @@ class Ok(Generic[T]):
         return f"Ok(state={self.state!r}, step={self.step_hash[:8]})"
 
 
-type StepResult[T] = Ok[T] | Impossible | Violated
+@dataclass(frozen=True)
+class Warning(Generic[T]):
+    """Non-fatal invariant issue. State advances but a rule flagged a concern.
+
+    Use Maintain(..., severity="warning") to produce Warning instead of Violated.
+    The event is accepted, state updates, but the Why records what was wrong.
+    """
+
+    state: T
+    ctx: SpecCtx
+    step_hash: str
+    why: Why
+    projections: dict[str, object] = field(default_factory=dict)
+    outputs: tuple[dict[str, object], ...] = ()
+
+    def map(self, f: Callable[[T], U]) -> Warning[U]:
+        return Warning(
+            state=f(self.state),
+            ctx=self.ctx,
+            step_hash=self.step_hash,
+            why=self.why,
+            projections=self.projections,
+            outputs=self.outputs,
+        )
+
+    def and_then(self, _f: Callable[..., object]) -> Warning[T]:
+        return self
+
+    def __repr__(self) -> str:
+        return f"Warning(rule={self.why.rule!r}, state={self.state!r}, step={self.step_hash[:8]})"
+
+
+type StepResult[T] = Ok[T] | Impossible | Violated | Warning[T]
 
 
 # -- Error streaming -----------------------------------------------------------

@@ -1,6 +1,6 @@
 [project]
 name = "k3c"
-version = "0.2.1"
+version = "0.3.0"
 description = "Kulkarni Calculus (K3) — Design causality, and the system emerges."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -55,7 +55,7 @@ addopts = "-q --tb=short --import-mode=importlib"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.2.1"
+version = "0.3.0"
 version_files = [
     "pyproject.toml:version",
 ]

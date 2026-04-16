@@ -25,13 +25,13 @@ from typing import Callable, cast
 
 from k3c.cache import invariant_cache_key
 from k3c.engine.ctx import SpecCtx
-from k3c.engine.result import Impossible, Ok, StepResult, Violated, Why, WhyKind
+from k3c.engine.result import Impossible, Ok, StepResult, Violated, Warning, Why, WhyKind
 from k3c.ir.eval import k3_eval
 from k3c.ir.value import Nothing, Some
 from k3c.json import dumps as _json_dumps
 from k3c.spec.compile import CompiledSpec
 from k3c.spec.extract import run_decode
-from k3c.spec.model import CompareMode
+from k3c.spec.model import CompareMode, Severity
 
 type TransitionFn = Callable[[dict[str, object], dict[str, object]], dict[str, object]]
 
@@ -149,23 +149,20 @@ def _check_safety(
     event: dict[str, object],
     ctx: SpecCtx,
     step_hash: str,
-) -> Why | None:
-    """Check all safety invariants against the NEW state."""
-    cache_key = invariant_cache_key(step_hash)
-    cached = compiled.cache.spec_invariant.get(cache_key)
-    if cached is not None:
-        return cached  # type: ignore[return-value]
+) -> tuple[Why | None, Severity]:
+    """Check all safety invariants against the NEW state.
 
+    Returns (Why, Severity) — severity determines Violated vs Warning.
+    """
     eval_ctx = _build_eval_ctx(new_state, event, ctx, new_state)
     eval_ctx["__prev_state__"] = state
     eval_ctx["__new_state__"] = new_state
 
-    failure: Why | None = None
     for clause in compiled.safety:
         result = k3_eval(clause.expr, eval_ctx, step_hash)
 
         if isinstance(result, Nothing):
-            failure = Why(
+            return Why(
                 rule=clause.name,
                 kind=WhyKind.MAINTAIN,
                 messages=(f"Maintain {clause.name!r}: field {result.field!r} absent",),
@@ -176,11 +173,10 @@ def _check_safety(
                 expected=None,
                 trace=ctx.snapshot_trace(),
                 step_hash=step_hash,
-            )
-            break
+            ), clause.severity
 
         if isinstance(result, Some) and result.val is False:
-            failure = Why(
+            return Why(
                 rule=clause.name,
                 kind=WhyKind.MAINTAIN,
                 messages=(f"Maintain {clause.name!r} violated",),
@@ -191,11 +187,9 @@ def _check_safety(
                 expected=None,
                 trace=ctx.snapshot_trace(),
                 step_hash=step_hash,
-            )
-            break
+            ), clause.severity
 
-    compiled.cache.spec_invariant.put(cache_key, failure)
-    return failure
+    return None, Severity.ERROR
 
 
 # -- K check: korrelation -----------------------------------------------------
@@ -426,6 +420,80 @@ def _compute_outputs(
 # -- apply_step() -- the causal step ------------------------------------------
 
 
+# -- V check: event-scoped validates ------------------------------------------
+
+
+def _check_validates(
+    compiled: CompiledSpec,
+    state: dict[str, object],
+    new_state: dict[str, object],
+    event: dict[str, object],
+    ctx: SpecCtx,
+    step_hash: str,
+) -> tuple[Why, Severity] | None:
+    """Check event-scoped validate clauses.
+
+    Only runs validates matching the event's type. Has full access to both
+    state and event fields in the eval context.
+    """
+    event_type = event.get("type")
+    if not isinstance(event_type, str):
+        return None
+
+    clauses = compiled.validates.get(event_type)
+    if not clauses:
+        return None
+
+    eval_ctx = _build_eval_ctx(new_state, event, ctx, new_state)
+    eval_ctx["__prev_state__"] = state
+
+    for clause in clauses:
+        result = k3_eval(clause.check, eval_ctx, step_hash)
+
+        if isinstance(result, Nothing):
+            msgs = [f"Validate {clause.name!r}: field {result.field!r} absent"]
+            if clause.field:
+                msgs.append(f"field: {clause.field}")
+            if clause.constraint:
+                msgs.append(f"constraint: {clause.constraint}")
+            return Why(
+                rule=clause.name,
+                kind=WhyKind.MAINTAIN,
+                messages=tuple(msgs),
+                before=state,
+                after=new_state,
+                event=event,
+                ctx=ctx,
+                expected=None,
+                trace=ctx.snapshot_trace(),
+                step_hash=step_hash,
+            ), clause.severity
+
+        if isinstance(result, Some) and result.val is False:
+            msgs = [f"Validate {clause.name!r} failed"]
+            if clause.field:
+                msgs.append(f"field: {clause.field}")
+            if clause.constraint:
+                msgs.append(f"constraint: {clause.constraint}")
+            return Why(
+                rule=clause.name,
+                kind=WhyKind.MAINTAIN,
+                messages=tuple(msgs),
+                before=state,
+                after=new_state,
+                event=event,
+                ctx=ctx,
+                expected=None,
+                trace=ctx.snapshot_trace(),
+                step_hash=step_hash,
+            ), clause.severity
+
+    return None
+
+
+# -- apply_step() -- the causal step ------------------------------------------
+
+
 def apply_step(
     *,
     state: dict[str, object],
@@ -459,6 +527,25 @@ def apply_step(
     # 1. I.decode -- raw event -> domain fields
     domain_event = run_decode(compiled.decode, raw_event)
 
+    # 1b. Check for __skip__ from DecodeDispatch default="skip"
+    if isinstance(domain_event, dict) and domain_event.get("__skip__"):
+        return Impossible(
+            why=Why(
+                rule="decode",
+                kind=WhyKind.MISSING,
+                messages=(
+                    f"Unmatched dispatch: discriminant={domain_event.get('__discriminant__')!r}",
+                ),
+                before=state,
+                after=None,
+                event=event_for_hash,
+                ctx=ctx,
+                expected=None,
+                trace=ctx.snapshot_trace(),
+                step_hash=step_hash,
+            )
+        )
+
     # 2. G check
     eval_ctx = _build_eval_ctx(state, domain_event, ctx)
     guard_failure = _check_guards(compiled, eval_ctx, domain_event, ctx, step_hash)
@@ -471,12 +558,25 @@ def apply_step(
     # 4. Ctx update -- U.require advances spec_state
     new_ctx = _apply_require(ctx, domain_event, compiled, step_hash)
 
-    # 5. N -- safety invariants
-    safety_failure = _check_safety(
+    # 4b. V -- event-scoped validates
+    warnings: list[Why] = []
+    validate_failure = _check_validates(
         compiled, state, new_state, domain_event, new_ctx, step_hash
     )
-    if safety_failure is not None:
-        return Violated(why=safety_failure)
+    if validate_failure is not None:
+        v_why, v_severity = validate_failure
+        if v_severity == Severity.ERROR:
+            return Violated(why=v_why)
+        warnings.append(v_why)
+
+    # 5. N -- safety invariants
+    safety_why, safety_severity = _check_safety(
+        compiled, state, new_state, domain_event, new_ctx, step_hash
+    )
+    if safety_why is not None:
+        if safety_severity == Severity.ERROR:
+            return Violated(why=safety_why)
+        warnings.append(safety_why)
 
     # 5b. K -- korrelation check
     korr_failure = _check_korrelation(
@@ -510,6 +610,17 @@ def apply_step(
         new_pos=new_ctx.protocol_pos,
         step_hash=step_hash,
     )
+
+    # If there are warnings, return Warning with the first one
+    if warnings:
+        return Warning(
+            state=new_state,
+            ctx=new_ctx,
+            step_hash=step_hash,
+            why=warnings[0],
+            projections=projections,
+            outputs=outputs,
+        )
 
     return Ok(
         state=new_state,
