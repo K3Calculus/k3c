@@ -1,6 +1,6 @@
 # k3c — Kulkarni Calculus Python SDK
 
-> k3c v0.3.0 | Python >=3.12 | MIT License
+> k3c v0.3.1 | Python >=3.12 | MIT License
 > Homepage: https://k3c.dev | Repository: https://github.com/K3Calculus/k3c
 
 ## What k3c Is
@@ -269,8 +269,25 @@ Derive a sub-spec from a DFA checkpoint for parallel processing.
 sub_spec = spec.slice(
     from_state={"phase": "IN_CARRIER", "serial": 100},  # new state0
     events=["RT3", "RT4"],                               # filter permits to these types
+    relax=["serial_continuity"],                          # drop invariants that break across sub-chunks
 )
-# maintains and korrelator unchanged — same causal laws
+```
+
+**Semantics:**
+- `from_state` becomes the new `state0`. Hash chain resets (fresh chain).
+- `SpecCtx` starts fresh. `Before("field")` on the first step returns `Nothing` (no previous state).
+- `events` filters permits to matching event types/names. If `None`, all permits carry forward.
+- `relax` drops named Maintain/Validate clauses. Use when splitting chunks would
+  break specific invariants (e.g., serial continuity across sub-chunks).
+- Korrelator, outputs, projections, and non-relaxed maintains carry forward unchanged.
+
+### Spec.decode_event() (Standalone Decode)
+
+Decode a raw event using the spec's decode plan without running the full apply pipeline.
+
+```python
+decoded = spec.decode_event(raw_bytes)
+# Returns dict — useful for inspecting fields, building outputs, or pre-filtering
 ```
 
 ## Expression IR (K3l)
@@ -430,6 +447,8 @@ report = u.fuzz(sequences=1000, steps=100, seed=42)  # property-based testing
 # State management
 u.reset()                               # reset to initial state
 u.state                                  # current state (copy)
+u.get("field")                           # read single field without copying
+u.get("field", default)                  # with default
 u.ctx                                    # current SpecCtx
 
 # Composition (KC-4)
@@ -745,7 +764,9 @@ Portable declarative field extraction for raw event decoding.
 ### Extractor Types
 
 ```python
-ByteSlice(start=0, length=10, encoding=TextEncoding.ASCII, trim=True)
+ByteSlice(start=0, length=10, encoding=TextEncoding.ASCII, trim=True, cast="int")
+# cast: "int" | "float" | "bool" | None — type coercion for extracted strings
+# ByteSlice(start=0, length=6, cast="int")  # "000003" -> 3
 BitField(byte_offset=0, bit_offset=3, width=5)
 JsonPath(path="$.data.value")
 XmlPath(path="/root/element")
@@ -754,7 +775,9 @@ FieldNum(number=1)          # protobuf
 AvroField(name="field")
 ColumnName(name="col")      # SQL
 ColumnIdx(index=0)
-Computed(expr=Arith(...))   # derived from other fields
+Computed(expr=Arith(...))   # derived from other fields (evaluated in decode phase)
+# Computed fields are evaluated after non-Computed fields are extracted.
+# Context: event={already extracted fields}, raw={raw input}
 Switch(discriminant=MapKey("type"), cases=(("a", MapKey("a_value")), ("b", MapKey("b_value"))))
 Identity()                  # pass-through
 ```
@@ -1109,7 +1132,12 @@ Every step produces a chained hash. Altering any step changes all subsequent has
 u = Universe(spec=spec, transition=fn, hash_fn="sha256")  # default
 u = Universe(spec=spec, transition=fn, hash_fn="blake2b")  # ~2x faster
 u = Universe(spec=spec, transition=fn, hash_fn="blake3")   # ~4-6x faster (requires pip install blake3)
+u = Universe(spec=spec, transition=fn, hash_fn="none")     # skip hashing — max throughput, no replay
 ```
+
+`hash_fn="none"` skips JSON serialization + hashing entirely. Use for high-throughput
+processing where tamper-evidence isn't needed. `step_hash` will be `""`.
+Replay and Samsara require a real hash function.
 
 ## Complete API Reference
 

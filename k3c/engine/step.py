@@ -46,6 +46,9 @@ def _hash_step(
     hash_fn: str = "sha256",
 ) -> str:
     """Compute the chained step hash."""
+    if hash_fn == "none":
+        return ""
+
     payload = _json_dumps({"state": state, "event": event, "prev": prev_step_hash})
     match hash_fn:
         case "sha256":

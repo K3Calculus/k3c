@@ -35,12 +35,18 @@ class TextEncoding(StrEnum):
 
 @dataclass(frozen=True)
 class ByteSlice:
-    """Extract a substring from fixed-width bytes."""
+    """Extract a substring from fixed-width bytes.
+
+    cast: optional type coercion for the extracted string.
+          "int" -> int(), "float" -> float(), "bool" -> bool().
+          None (default) -> return as string.
+    """
 
     start: int
     length: int
     encoding: TextEncoding = TextEncoding.ASCII
     trim: bool = True
+    cast: str | None = None
 
 
 @dataclass(frozen=True)
@@ -181,6 +187,24 @@ class DecodeDispatch:
 type DecodePlan = DecodeIdentity | DecodeFields | DecodeDispatch
 
 
+# -- Cast helper ---------------------------------------------------------------
+
+_CAST_FNS: dict[str, type] = {"int": int, "float": float, "bool": bool}
+
+
+def _apply_cast(val: str, cast_type: str | None) -> object:
+    """Apply optional type coercion to an extracted string value."""
+    if cast_type is None:
+        return val
+    fn = _CAST_FNS.get(cast_type)
+    if fn is None:
+        return val
+    try:
+        return fn(val)
+    except (ValueError, TypeError):
+        return None
+
+
 # -- Extractor execution -------------------------------------------------------
 
 
@@ -192,15 +216,17 @@ def run_extractor(
     Returns the extracted value.
     """
     match extractor:
-        case ByteSlice(start=s, length=l, encoding=enc, trim=do_trim):
+        case ByteSlice(start=s, length=l, encoding=enc, trim=do_trim, cast=cast_type):
             if isinstance(raw, (bytes, bytearray)):
                 chunk = raw[s : s + l]
                 decoded = chunk.decode(enc.value)
-                return decoded.strip() if do_trim else decoded
-            if isinstance(raw, str):
+                val = decoded.strip() if do_trim else decoded
+            elif isinstance(raw, str):
                 chunk = raw[s : s + l]
-                return chunk.strip() if do_trim else chunk
-            return None
+                val = chunk.strip() if do_trim else chunk
+            else:
+                return None
+            return _apply_cast(val, cast_type)
 
         case BitField(byte_offset=bo, bit_offset=bi, width=w):
             if isinstance(raw, (bytes, bytearray)):
@@ -292,8 +318,21 @@ def run_decode(plan: DecodePlan | None, raw: object) -> dict[str, object]:
 
         case DecodeFields(fields=fields):
             result: dict[str, object] = {}
+            # Two-pass: extract non-Computed first, then evaluate Computed
+            computed: list[tuple[str, Computed]] = []
             for name, extractor in fields:
-                result[name] = run_extractor(extractor, raw)
+                if isinstance(extractor, Computed):
+                    computed.append((name, extractor))
+                else:
+                    result[name] = run_extractor(extractor, raw)
+            if computed:
+                from k3c.ir.eval import k3_eval
+                from k3c.ir.value import Some
+
+                eval_ctx: dict[str, object] = {"event": result, "raw": raw}
+                for name, comp in computed:
+                    val = k3_eval(comp.expr, eval_ctx, "")
+                    result[name] = val.val if isinstance(val, Some) else None
             return result
 
         case DecodeDispatch(discriminant=disc, cases=cases, default=default):

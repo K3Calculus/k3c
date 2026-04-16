@@ -144,6 +144,10 @@ class Universe:
     def state(self) -> dict[str, object]:
         return self._state.copy()
 
+    def get(self, field: str, default: object = None) -> object:
+        """Read a single state field without copying the entire dict."""
+        return self._state.get(field, default)
+
     @property
     def ctx(self) -> SpecCtx:
         return self._ctx

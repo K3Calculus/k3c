@@ -213,16 +213,33 @@ class Spec:
     # Protocol
     protocol_start: str = "__start__"
 
+    def decode_event(self, raw: object) -> dict[str, object]:
+        """Decode a raw event using this spec's decode plan without the full apply pipeline.
+
+        Returns the decoded domain event as a dict. Useful for inspecting
+        decoded fields without running guards, transitions, or invariants.
+        """
+        from k3c.spec.extract import run_decode
+
+        return run_decode(self.decode, raw)
+
     def slice(
         self,
         from_state: dict[str, object],
         events: list[str] | None = None,
+        relax: list[str] | None = None,
     ) -> Spec:
         """Derive a sub-spec starting from a known DFA checkpoint.
 
-        from_state becomes state0 for the derived spec.
-        events filters permits to only those matching the given event names.
-        Maintain clauses and korrelator are unchanged -- same causal laws.
+        from_state: becomes state0 for the derived spec. Hash chain resets.
+        events: filters permits to only those matching the given event names.
+        relax: list of Maintain clause names to drop from the derived spec.
+               Use this when splitting chunks that would break specific
+               invariants (e.g., serial continuity across sub-chunks).
+
+        SpecCtx starts fresh. Before() on the first step returns Nothing
+        (no previous state). Maintain and korrelator are carried forward
+        unless explicitly relaxed.
         """
         if events is not None:
             event_set = set(events)
@@ -232,6 +249,18 @@ class Spec:
         else:
             active_permits = self.permits
 
+        if relax is not None:
+            relax_set = set(relax)
+            active_maintains = tuple(
+                m for m in self.maintains if m.name not in relax_set
+            )
+            active_validates = tuple(
+                v for v in self.validates if v.name not in relax_set
+            )
+        else:
+            active_maintains = self.maintains
+            active_validates = self.validates
+
         return Spec(
             name=self.name,
             state0=from_state,
@@ -239,8 +268,8 @@ class Spec:
             decode=self.decode,
             permits=active_permits,
             requires=self.requires,
-            maintains=self.maintains,
-            validates=self.validates,
+            maintains=active_maintains,
+            validates=active_validates,
             projections=self.projections,
             outputs=self.outputs,
             korrelator=self.korrelator,

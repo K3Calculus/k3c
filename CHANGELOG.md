@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.3.1 (2026-04-16)
+
+### Features
+
+- **`ByteSlice` cast**: `cast="int"|"float"|"bool"` for type coercion on extracted strings (e.g., `"000003"` -> `3`)
+- **`Computed` in decode plans**: `Computed(expr=...)` now evaluates expressions against already-extracted fields during decode
+- **`Spec.slice(relax=...)`**: drop named Maintain/Validate clauses for sub-chunks that would break specific invariants
+- **`Universe.get(field)`**: read single state field without copying the entire dict
+- **`Spec.decode_event(raw)`**: standalone decode without the full apply pipeline
+- **`hash_fn="none"`**: skip JSON serialization + hashing for max throughput (no replay support)
+- **Spec.slice() semantics documented**: hash chain reset, SpecCtx behavior, Before() on first step
+
 ## v0.3.0 (2026-04-16)
 
 ### Features
