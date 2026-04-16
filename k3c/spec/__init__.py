@@ -1,72 +1,86 @@
-# k3c.spec — The Intent Layer
+# k3c.spec — The Declarative Spec Layer
 """
 K3.Specs: (I, U, K) specification framework.
 
 Key exports:
-    - Spec builder + K3Spec
-    - Clause types (PermitClause, RequireClause, MaintainClause, ...)
-    - SpecCtx — the ambient witness
-    - K3Result (Ok, Impossible, Violated) + Why
-    - Extractors for I.decode
+    - Spec (frozen dataclass)
+    - Clause types (Permit, Require, Maintain, Projection, Output, Korrelator)
+    - Extractors and DecodePlan
+    - compile_spec() -> CompiledSpec
 """
 
-from k3c.spec.builder import (
-    FieldDef,
-    K3Spec,
-    KorrelatorDef,
-    MaintainClause,
-    OutputDef,
-    PermitClause,
-    ProjectionDef,
-    RequireClause,
-    Spec,
+from k3c.spec.compile import (
+    ClassifiedMaintain,
+    CompiledSpec,
+    MaintainKind,
+    classify_maintain,
+    compile_spec,
 )
-from k3c.spec.ctx import SpecCtx
-from k3c.spec.extractor import (
+from k3c.spec.extract import (
     AvroField,
     BitField,
     ByteSlice,
     ColumnIdx,
     ColumnName,
     Computed,
+    DecodeDispatch,
+    DecodeFields,
+    DecodeIdentity,
     Extractor,
+    FieldNum,
     Identity,
     JsonPath,
     MapKey,
     Switch,
     TextEncoding,
     XmlPath,
+    run_decode,
+    run_extractor,
 )
-from k3c.spec.result import Impossible, K3Result, Ok, Violated, Why, WhyKind
+from k3c.spec.model import (
+    CompareMode,
+    FieldDef,
+    Korrelator,
+    Maintain,
+    Output,
+    Permit,
+    Projection,
+    Require,
+    Spec,
+)
 
 __all__ = [
     "Spec",
-    "K3Spec",
-    "SpecCtx",
     "FieldDef",
-    "PermitClause",
-    "RequireClause",
-    "MaintainClause",
-    "ProjectionDef",
-    "OutputDef",
-    "KorrelatorDef",
-    "Ok",
-    "Impossible",
-    "Violated",
-    "Why",
-    "WhyKind",
-    "K3Result",
+    "Permit",
+    "Require",
+    "Maintain",
+    "Projection",
+    "Output",
+    "Korrelator",
+    "CompareMode",
+    "compile_spec",
+    "CompiledSpec",
+    "ClassifiedMaintain",
+    "MaintainKind",
+    "classify_maintain",
     "ByteSlice",
     "BitField",
     "JsonPath",
     "XmlPath",
     "MapKey",
+    "FieldNum",
+    "AvroField",
     "ColumnName",
     "ColumnIdx",
-    "AvroField",
     "Computed",
     "Switch",
     "Identity",
     "TextEncoding",
     "Extractor",
+    "DecodeIdentity",
+    "DecodeFields",
+    "DecodeDispatch",
+    "run_extractor",
+    "run_decode",
 ]

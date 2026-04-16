@@ -1,13 +1,12 @@
-# k3c/lang/serde.py
+# k3c/ir/serde.py
 """
-Round-trip serialization for K3l and K3lType nodes.
+Round-trip serialization for Expr and ExprType nodes.
 
-to_dict(node) → plain dict (JSON-ready)
-from_dict(data) → frozen K3l or K3lType node
+to_dict(node) -> plain dict (JSON-ready)
+from_dict(data) -> frozen Expr or ExprType node
 
-Every K3l node serializes to {"type": "<ClassName>", ...fields}.
-The format is deterministic — same node always produces the same dict.
-Used by: IR hashing, subinterpreter isolation, spec file loading.
+Every node serializes to {"type": "<ClassName>", ...fields}.
+The format is deterministic - same node always produces the same dict.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from __future__ import annotations
 from typing import assert_never, cast
 
 from k3c.errors import K3SerdeError
-from k3c.lang.ir import (
+from k3c.ir.expr import (
     Abs,
     Actual,
     After,
@@ -28,11 +27,11 @@ from k3c.lang.ir import (
     Compare,
     Concat,
     Contains,
-    DateFormat,
     Described,
     EventField,
     Eventually,
     Exists,
+    Expr,
     Field,
     Filter,
     Fold,
@@ -42,8 +41,6 @@ from k3c.lang.ir import (
     Index,
     Intended,
     IsSome,
-    K3l,
-    K3lType,
     LBool,
     Length,
     LFloat,
@@ -61,38 +58,42 @@ from k3c.lang.ir import (
     Or,
     Record,
     Slice,
-    TBool,
-    TBytes,
-    TDate,
-    TEnum,
-    TFloat,
-    TimeFormat,
-    TInt,
-    TList,
-    TOption,
-    TRecord,
-    TRef,
     Trim,
-    TString,
-    TTime,
-    TUnit,
-    TVariant,
     Until,
     UnwrapOr,
     Var,
     With,
     Within,
 )
+from k3c.ir.types import (
+    DateFormat,
+    ExprType,
+    TBool,
+    TBytes,
+    TDate,
+    TEnum,
+    TFloat,
+    TInt,
+    TList,
+    TOption,
+    TRecord,
+    TRef,
+    TString,
+    TTime,
+    TUnit,
+    TVariant,
+    TimeFormat,
+)
 
-# ── K3l serialization ───────────────────────────────────────────────────────
+# -- Expr serialization --------------------------------------------------------
 
 
-def _fields_to_list(fields: tuple[tuple[str, K3l], ...]) -> list[dict[str, object]]:
+def _fields_to_list(fields: tuple[tuple[str, Expr], ...]) -> list[dict[str, object]]:
     return [{"name": n, "expr": to_dict(e)} for n, e in fields]
 
 
-def to_dict(node: K3l) -> dict[str, object]:
-    """Serialize a K3l expression node to a plain dict."""
+def to_dict(node: Expr) -> dict[str, object]:
+    """Serialize an Expr node to a plain dict."""
     match node:
         # Literals
         case LBool(val=v):
@@ -267,10 +268,8 @@ def to_dict(node: K3l) -> dict[str, object]:
             assert_never(unreachable)
 
 
-# ── K3l deserialization ──────────────────────────────────────────────────────
+# -- Expr deserialization ------------------------------------------------------
 
-
-# Dispatch tables for common patterns
 _EXPR_NODES: dict[str, type] = {
     "Not": Not,
     "IsSome": IsSome,
@@ -308,7 +307,7 @@ _STR_FIELD_NODES: dict[str, type] = {
 }
 
 
-def _fields_from_list(data: list[object], node: str) -> tuple[tuple[str, K3l], ...]:
+def _fields_from_list(data: list[object], node: str) -> tuple[tuple[str, Expr], ...]:
     result = []
     for item in data:
         d = _ensure_dict(item, node)
@@ -318,7 +317,7 @@ def _fields_from_list(data: list[object], node: str) -> tuple[tuple[str, K3l], .
     return tuple(result)
 
 
-def _from_dict_literal(node_type: str, data: dict[str, object]) -> K3l | None:
+def _from_dict_literal(node_type: str, data: dict[str, object]) -> Expr | None:
     """Parse literal nodes. Returns None if node_type is not a literal."""
     match node_type:
         case "LBool":
@@ -360,7 +359,7 @@ def _from_dict_literal(node_type: str, data: dict[str, object]) -> K3l | None:
             return None
 
 
-def _from_dict_compound(node_type: str, data: dict[str, object]) -> K3l | None:
+def _from_dict_compound(node_type: str, data: dict[str, object]) -> Expr | None:
     """Parse compound/structural nodes. Returns None if not handled."""
     match node_type:
         case "Var":
@@ -446,8 +445,8 @@ def _from_dict_compound(node_type: str, data: dict[str, object]) -> K3l | None:
             return None
 
 
-def from_dict(data: dict[str, object]) -> K3l:
-    """Deserialize a plain dict to a K3l expression node."""
+def from_dict(data: dict[str, object]) -> Expr:
+    """Deserialize a plain dict to an Expr node."""
     node_type = data.get("type")
     if not isinstance(node_type, str):
         raise K3SerdeError(node="unknown", message="missing or non-string 'type' field")
@@ -484,7 +483,7 @@ def from_dict(data: dict[str, object]) -> K3l:
             right=from_dict(_dict_field(data, "Arith", "right")),
         )
 
-    # String-field-only nodes (Before, After, EventField, Actual, Intended)
+    # String-field-only nodes
     if node_type in _STR_FIELD_NODES:
         field_name = (
             "name" if node_type in ("EventField", "Actual", "Intended") else "field"
@@ -495,7 +494,7 @@ def from_dict(data: dict[str, object]) -> K3l:
             **{field_name: _str_field(data, node_type, field_name)}
         )
 
-    # Quantifier-like nodes (var + collection + predicate)
+    # Quantifier-like nodes
     if node_type in _QUANTIFIER_NODES:
         return _QUANTIFIER_NODES[node_type](
             var=_str_field(data, node_type, "var"),
@@ -511,11 +510,11 @@ def from_dict(data: dict[str, object]) -> K3l:
     raise K3SerdeError(node=node_type, message=f"unknown node type {node_type!r}")
 
 
-# ── K3lType serialization ───────────────────────────────────────────────────
+# -- ExprType serialization ----------------------------------------------------
 
 
-def type_to_dict(node: K3lType) -> dict[str, object]:
-    """Serialize a K3lType node to a plain dict."""
+def type_to_dict(node: ExprType) -> dict[str, object]:
+    """Serialize an ExprType node to a plain dict."""
     match node:
         case TBool():
             return {"type": "TBool"}
@@ -555,11 +554,11 @@ def type_to_dict(node: K3lType) -> dict[str, object]:
             assert_never(unreachable)
 
 
-# ── K3lType deserialization ──────────────────────────────────────────────────
+# -- ExprType deserialization --------------------------------------------------
 
 
-def type_from_dict(data: dict[str, object]) -> K3lType:
-    """Deserialize a plain dict to a K3lType node."""
+def type_from_dict(data: dict[str, object]) -> ExprType:
+    """Deserialize a plain dict to an ExprType node."""
     node_type = data.get("type")
     if not isinstance(node_type, str):
         raise K3SerdeError(node="unknown", message="missing or non-string 'type' field")
@@ -622,7 +621,7 @@ def type_from_dict(data: dict[str, object]) -> K3lType:
             )
 
 
-# ── Field extraction helpers ────────────────────────────────────────────────
+# -- Field extraction helpers --------------------------------------------------
 
 
 def _str_field(data: dict[str, object], node: str, field: str) -> str:

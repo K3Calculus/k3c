@@ -1,53 +1,79 @@
-# k3c/universe/bridge.py
+# k3c/runtime/bridge.py
 """
-Bridge — cross-universe event propagation.
+Bridge -- cross-universe event propagation.
 
-A Bridge connects two Universes. When the source Universe produces an
-output event (via apply → Ok), the mapper function transforms it into
-an input event for the target. The BridgeMode controls delivery guarantees.
-
-Usage:
-    audited = order_u.bridge(audit_u, order_to_audit, BridgeMode.ASYNC)
-
-The algebra is closed: BridgedUniverse supports compose() and bridge().
+A Bridge connects two Universes. When the source produces Ok, the mapper
+transforms the event into a target event. BridgeMode controls delivery.
 """
 
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Callable, cast
 
+from k3c.engine.ctx import SpecCtx
+from k3c.engine.result import Impossible, Ok, StepResult, Violated
 from k3c.errors import K3BridgeError
-from k3c.spec.ctx import SpecCtx
-from k3c.spec.result import Impossible, K3Result, Ok, Violated
-from k3c.universe.compose import Applyable
-from k3c.universe.retry import (
-    BridgeMode,
-    DeadLetterEntry,
-    FallbackStrategy,
-    RetryPolicy,
-)
+from k3c.runtime.compose import Applyable
 
-_State = "dict[str, object]"
 
-# ── Mapper type ──────────────────────────────────────────────────────────────
+class BridgeMode(StrEnum):
+    SYNCHRONOUS = "synchronous"
+    ASYNC = "async"
+    BEST_EFFORT = "best_effort"
 
-# Mapper: (source_state, event, new_state) → target_event or None
+
+class FallbackStrategy(StrEnum):
+    FAIL = "fail"
+    IGNORE = "ignore"
+    DEAD_LETTER = "dead_letter"
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    max_attempts: int = 1
+    base_delay_ms: int = 0
+    strategy: str = "none"
+
+    @staticmethod
+    def no_retry() -> RetryPolicy:
+        return RetryPolicy(max_attempts=1, base_delay_ms=0, strategy="none")
+
+    @staticmethod
+    def fixed_delay(n: int, delay_ms: int) -> RetryPolicy:
+        return RetryPolicy(max_attempts=n, base_delay_ms=delay_ms, strategy="fixed")
+
+    @staticmethod
+    def exponential_backoff(n: int, base_ms: int) -> RetryPolicy:
+        return RetryPolicy(
+            max_attempts=n, base_delay_ms=base_ms, strategy="exponential"
+        )
+
+
+@dataclass(frozen=True)
+class DeadLetterEntry:
+    source_event: dict[str, object]
+    target_event: dict[str, object]
+    source_state: dict[str, object]
+    attempts: int
+    last_error: str
+
+
 type BridgeMapper = Callable[
     [dict[str, object], dict[str, object], dict[str, object]],
     dict[str, object] | None,
 ]
 
-
-# ── Delivery with retry ────────────────────────────────────────────────────
+_State = "dict[str, object]"
 
 
 def _deliver_to_target(
     target: Applyable,
     target_event: dict[str, object],
     retry: RetryPolicy,
-) -> K3Result[dict[str, object]]:
-    """Attempt delivery to target with retry policy."""
+) -> StepResult[dict[str, object]]:
     last_error = ""
     for attempt in range(retry.max_attempts):
         try:
@@ -55,7 +81,6 @@ def _deliver_to_target(
             if isinstance(result, (Ok, Violated)):
                 return result
             if isinstance(result, Impossible):
-                # Impossible on target — not retryable
                 return result
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
@@ -66,31 +91,18 @@ def _deliver_to_target(
             elif retry.strategy == "exponential":
                 time.sleep((retry.base_delay_ms * (2**attempt)) / 1000)
 
-    msg = f"Bridge delivery failed after {retry.max_attempts} attempts: {last_error}"
     raise K3BridgeError(
         source_id="source",
         target_id="target",
         bridge_event=target_event,
         attempts=retry.max_attempts,
-        last_reason=last_error or msg,
+        last_reason=last_error
+        or f"delivery failed after {retry.max_attempts} attempts",
     )
 
 
-# ── BridgedUniverse ─────────────────────────────────────────────────────────
-
-
 class BridgedUniverse:
-    """Two Universes connected with <->.
-
-    When source.apply() produces Ok, the mapper transforms the event into
-    a target event. Delivery behavior depends on BridgeMode:
-
-        Synchronous: both must succeed or neither does
-        Async: source commits first, target receives later
-        BestEffort: target delivery is best-effort, failures ignored
-
-    Supports the same apply()/reduce()/compose()/bridge() interface.
-    """
+    """Two Universes connected with <->."""
 
     def __init__(
         self,
@@ -125,22 +137,17 @@ class BridgedUniverse:
     def mode(self) -> BridgeMode:
         return self._mode
 
-    def apply(self, event: dict[str, object]) -> K3Result[dict[str, object]]:
-        """Apply event to source. On Ok, bridge to target per mode."""
+    def apply(self, event: dict[str, object]) -> StepResult[dict[str, object]]:
         source_result = self._source.apply(event)
-
         if not isinstance(source_result, Ok):
             return source_result
 
-        # Map source output to target input
         target_event = self._mapper(
             cast(_State, source_result.state),
             event,
             cast(_State, source_result.state),
         )
-
         if target_event is None:
-            # Mapper chose not to bridge this event
             return source_result
 
         return self._deliver(source_result, target_event, event)
@@ -150,47 +157,29 @@ class BridgedUniverse:
         source_result: Ok[dict[str, object]],
         target_event: dict[str, object],
         original_event: dict[str, object],
-    ) -> K3Result[dict[str, object]]:
-        """Deliver to target based on bridge mode."""
+    ) -> StepResult[dict[str, object]]:
         if self._mode == BridgeMode.SYNCHRONOUS:
             return self._deliver_sync(source_result, target_event, original_event)
         if self._mode == BridgeMode.ASYNC:
             return self._deliver_async(source_result, target_event, original_event)
-        # BestEffort
         return self._deliver_best_effort(source_result, target_event, original_event)
 
-    def _deliver_sync(
-        self,
-        source_result: Ok[dict[str, object]],
-        target_event: dict[str, object],
-        original_event: dict[str, object],
-    ) -> K3Result[dict[str, object]]:
-        """Synchronous: both succeed or neither does."""
+    def _deliver_sync(self, source_result, target_event, original_event):
         try:
             target_result = _deliver_to_target(self._target, target_event, self._retry)
         except K3BridgeError:
-            return self._handle_delivery_failure(
+            return self._handle_failure(
                 source_result, target_event, original_event, "delivery raised"
             )
-
         if isinstance(target_result, Violated):
             return target_result
-
         if isinstance(target_result, Impossible):
-            return self._handle_delivery_failure(
-                source_result, target_event, original_event, "target rejected event"
+            return self._handle_failure(
+                source_result, target_event, original_event, "target rejected"
             )
-
         return source_result
 
-    def _handle_delivery_failure(
-        self,
-        source_result: Ok[dict[str, object]],
-        target_event: dict[str, object],
-        original_event: dict[str, object],
-        reason: str,
-    ) -> K3Result[dict[str, object]]:
-        """Handle a bridge delivery failure based on fallback strategy."""
+    def _handle_failure(self, source_result, target_event, original_event, reason):
         if self._fallback == FallbackStrategy.FAIL:
             raise K3BridgeError(
                 source_id="source",
@@ -209,20 +198,9 @@ class BridgedUniverse:
                     last_error=reason,
                 )
             )
-        # IGNORE or DEAD_LETTER — source result stands
         return source_result
 
-    def _deliver_async(
-        self,
-        source_result: Ok[dict[str, object]],
-        target_event: dict[str, object],
-        original_event: dict[str, object],
-    ) -> K3Result[dict[str, object]]:
-        """Async: source commits first. Target receives later.
-
-        Source result is returned immediately. Target delivery happens
-        but failures don't affect the source outcome.
-        """
+    def _deliver_async(self, source_result, target_event, original_event):
         try:
             target_result = _deliver_to_target(self._target, target_event, self._retry)
             if (
@@ -235,7 +213,7 @@ class BridgedUniverse:
                         target_event=target_event,
                         source_state=cast(_State, source_result.state),
                         attempts=1,
-                        last_error="target rejected event",
+                        last_error="target rejected",
                     )
                 )
         except K3BridgeError:
@@ -251,24 +229,15 @@ class BridgedUniverse:
                 )
         return source_result
 
-    def _deliver_best_effort(
-        self,
-        source_result: Ok[dict[str, object]],
-        target_event: dict[str, object],
-        original_event: dict[str, object],  # noqa: ARG002
-    ) -> K3Result[dict[str, object]]:
-        """BestEffort: try once, ignore failures."""
+    def _deliver_best_effort(self, source_result, target_event, original_event):
         try:
             self._target.apply(target_event)
         except Exception:  # noqa: BLE001
-            pass  # best effort — silently ignore
+            pass
         return source_result
 
-    def reduce(self, events: list[dict[str, object]]) -> K3Result[dict[str, object]]:
-        """Fold events through apply(). Stops on first non-Ok."""
-        if not events:
-            return Ok(state=self.state, ctx=SpecCtx.initial({}), step_hash="")
-        result: K3Result[dict[str, object]] = Ok(
+    def reduce(self, events: list[dict[str, object]]) -> StepResult[dict[str, object]]:
+        result: StepResult[dict[str, object]] = Ok(
             state=self.state, ctx=SpecCtx.initial({}), step_hash=""
         )
         for event in events:
@@ -277,38 +246,9 @@ class BridgedUniverse:
                 return result
         return result
 
-    def compose(
-        self, other: Applyable, router: Callable[[dict[str, object]], str]
-    ) -> object:
-        """Compose this bridged universe with another. Algebra is closed."""
-        from k3c.universe.compose import ComposedUniverse
-
-        return ComposedUniverse(left=self, right=other, router=router)
-
-    def bridge(
-        self,
-        target: Applyable,
-        mapper: BridgeMapper,
-        mode: BridgeMode = BridgeMode.SYNCHRONOUS,
-        retry: RetryPolicy | None = None,
-        fallback: FallbackStrategy = FallbackStrategy.FAIL,
-    ) -> BridgedUniverse:
-        """Bridge this to another target. Algebra is closed."""
-        return BridgedUniverse(
-            source=self,
-            target=target,
-            mapper=mapper,
-            mode=mode,
-            retry=retry,
-            fallback=fallback,
-        )
-
     @property
     def state(self) -> dict[str, object]:
-        return {
-            "source": self._source.state,
-            "target": self._target.state,
-        }
+        return {"source": self._source.state, "target": self._target.state}
 
     def __repr__(self) -> str:
         return f"BridgedUniverse(mode={self._mode}, dead_letters={len(self._dead_letters)})"

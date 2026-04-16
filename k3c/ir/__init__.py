@@ -1,17 +1,18 @@
-# k3c.lang — The Expression Layer
+# k3c.ir - The Expression Layer
 """
-K3.Lang: portable IR for K3 expressions.
+K3 IR: portable expression language for K3 specifications.
 
 Key exports:
-    - K3l nodes (LBool, LInt, Var, Field, Compare, Arith, Always, ...)
+    - Expr nodes (LBool, LInt, Var, Field, Compare, Arith, Always, ...)
     - Option types (Some, Nothing)
-    - Typed enums (CmpOp, ArithOp)
+    - ExprType nodes (TBool, TInt, TString, TRecord, ...)
+    - Typed enums (CmpOp, ArithOp, DateFormat, TimeFormat)
     - k3_eval() total interpreter
     - to_dict() / from_dict() JSON serde
 """
 
-from k3c.lang.eval import k3_eval
-from k3c.lang.ir import (
+from k3c.ir.eval import k3_eval
+from k3c.ir.expr import (
     Abs,
     Actual,
     After,
@@ -24,11 +25,11 @@ from k3c.lang.ir import (
     Compare,
     Concat,
     Contains,
-    DateFormat,
     Described,
-    Eventually,
     EventField,
+    Eventually,
     Exists,
+    Expr,
     Field,
     Filter,
     Fold,
@@ -38,9 +39,6 @@ from k3c.lang.ir import (
     Index,
     Intended,
     IsSome,
-    K3l,
-    K3lType,
-    K3Option,
     LBool,
     LFloat,
     LInt,
@@ -55,11 +53,20 @@ from k3c.lang.ir import (
     Named,
     Negate,
     Not,
-    Nothing,
     Or,
     Record,
     Slice,
-    Some,
+    Trim,
+    Until,
+    UnwrapOr,
+    Var,
+    With,
+    Within,
+)
+from k3c.ir.serde import from_dict, to_dict, type_from_dict, type_to_dict
+from k3c.ir.types import (
+    DateFormat,
+    ExprType,
     TBool,
     TBytes,
     TDate,
@@ -72,53 +79,53 @@ from k3c.lang.ir import (
     TRef,
     TString,
     TTime,
-    TimeFormat,
     TUnit,
     TVariant,
-    Trim,
-    UnwrapOr,
-    Until,
-    Var,
-    With,
-    Within,
+    TimeFormat,
 )
-from k3c.lang.emit import to_python, to_sql, to_typescript
-from k3c.lang.serde import from_dict, to_dict, type_from_dict, type_to_dict
+from k3c.ir.value import K3Option, Nothing, Some
 
 __all__ = [
+    # Evaluator
     "k3_eval",
+    # Serde
     "to_dict",
     "from_dict",
     "type_to_dict",
     "type_from_dict",
-    "to_typescript",
-    "to_sql",
-    "to_python",
+    # Option types
+    "Some",
+    "Nothing",
+    "K3Option",
+    # Expression union
+    "Expr",
+    # Type union
+    "ExprType",
+    # Operator enums
     "CmpOp",
     "ArithOp",
     "DateFormat",
     "TimeFormat",
-    "Some",
-    "Nothing",
-    "K3Option",
-    "K3l",
-    "K3lType",
+    # Literals
     "LBool",
     "LInt",
     "LFloat",
     "LStr",
     "LList",
+    # Variables and access
     "Var",
     "Field",
     "Index",
     "EventField",
     "Actual",
     "Intended",
+    # Logic
     "And",
     "Or",
     "Not",
     "If",
     "Implies",
+    # Comparison and arithmetic
     "Compare",
     "Arith",
     "Mod",
@@ -126,8 +133,10 @@ __all__ = [
     "Abs",
     "Min",
     "Max",
+    # Option operations
     "IsSome",
     "UnwrapOr",
+    # Collections
     "ForAll",
     "Exists",
     "Length",
@@ -135,20 +144,26 @@ __all__ = [
     "Map",
     "Filter",
     "Fold",
+    # String operations
     "Concat",
     "Trim",
     "Slice",
     "Matches",
+    # Record construction
     "Record",
     "With",
+    # Temporal
     "Before",
     "After",
+    # Spec nodes
     "Always",
     "Eventually",
     "Within",
     "Until",
+    # Annotation
     "Named",
     "Described",
+    # Type nodes
     "TBool",
     "TInt",
     "TString",

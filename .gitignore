@@ -13,3 +13,6 @@ wheels/
 .hypothesis/
 
 .claude/
+.docs/
+
+examples/ssim

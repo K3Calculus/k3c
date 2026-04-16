@@ -1,9 +1,9 @@
-# k3c/lang/eval.py
+# k3c/ir/eval.py
 """
-Total interpreter for K3.Lang expressions.
+Total interpreter for K3 expressions.
 
 k3_eval() returns Some[object] | Nothing on every path. It never raises.
-Nothing propagates through every operation — like NaN in IEEE 754.
+Nothing propagates through every operation - like NaN in IEEE 754.
 And/Or short-circuit: the right side is never evaluated when the
 left decides the outcome.
 """
@@ -14,7 +14,7 @@ import operator
 import re as _regex
 from typing import TYPE_CHECKING, assert_never, cast
 
-from k3c.lang.ir import (
+from k3c.ir.expr import (
     Abs,
     Actual,
     After,
@@ -31,6 +31,7 @@ from k3c.lang.ir import (
     EventField,
     Eventually,
     Exists,
+    Expr,
     Field,
     Filter,
     Fold,
@@ -40,8 +41,6 @@ from k3c.lang.ir import (
     Index,
     Intended,
     IsSome,
-    K3l,
-    K3Option,
     LBool,
     Length,
     LFloat,
@@ -56,11 +55,9 @@ from k3c.lang.ir import (
     Named,
     Negate,
     Not,
-    Nothing,
     Or,
     Record,
     Slice,
-    Some,
     Trim,
     Until,
     UnwrapOr,
@@ -68,11 +65,12 @@ from k3c.lang.ir import (
     With,
     Within,
 )
+from k3c.ir.value import K3Option, Nothing, Some
 
 if TYPE_CHECKING:
     from typing import Any
 
-# ── Operator dispatch tables ─────────────────────────────────────────────────
+# -- Operator dispatch tables --------------------------------------------------
 
 _CMP_OPS: dict[CmpOp, Any] = {
     CmpOp.EQ: operator.eq,
@@ -89,11 +87,11 @@ _ARITH_OPS: dict[ArithOp, Any] = {
     ArithOp.MUL: operator.mul,
 }
 
-# ── Shorthand type ──────────────────────────────────────────────────────────
+# -- Shorthand type ------------------------------------------------------------
 
 type _Res = K3Option[object]
 
-# ── Eval helpers ────────────────────────────────────────────────────────────
+# -- Eval helpers --------------------------------------------------------------
 
 
 def _nothing(field: str, sh: str) -> Nothing:
@@ -106,7 +104,7 @@ def _expect_bool(result: Some[object], sh: str) -> _Res:
     return _nothing("expected-bool", sh)
 
 
-def _unwrap(expr: K3l, ctx: dict[str, object], sh: str) -> Some[object] | Nothing:
+def _unwrap(expr: Expr, ctx: dict[str, object], sh: str) -> Some[object] | Nothing:
     """Eval and return; caller checks for Nothing."""
     return k3_eval(expr, ctx, sh)
 
@@ -117,10 +115,10 @@ def _expect_list(result: Some[object], sh: str) -> list[object] | Nothing:
     return _nothing("expected-list", sh)
 
 
-# ── Extracted handlers ──────────────────────────────────────────────────────
+# -- Extracted handlers --------------------------------------------------------
 
 
-def _eval_field(base: K3l, name: str, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_field(base: Expr, name: str, ctx: dict[str, object], sh: str) -> _Res:
     result = k3_eval(base, ctx, sh)
     if isinstance(result, Nothing):
         return result
@@ -133,7 +131,7 @@ def _eval_field(base: K3l, name: str, ctx: dict[str, object], sh: str) -> _Res:
     return _nothing(name, sh)
 
 
-def _eval_and(le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_and(le: Expr, re: Expr, ctx: dict[str, object], sh: str) -> _Res:
     left = k3_eval(le, ctx, sh)
     if isinstance(left, Nothing):
         return left
@@ -148,7 +146,7 @@ def _eval_and(le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
     return _expect_bool(right, sh)
 
 
-def _eval_or(le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_or(le: Expr, re: Expr, ctx: dict[str, object], sh: str) -> _Res:
     left = k3_eval(le, ctx, sh)
     if isinstance(left, Nothing):
         return left
@@ -163,7 +161,7 @@ def _eval_or(le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
     return _expect_bool(right, sh)
 
 
-def _eval_not(expr: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_not(expr: Expr, ctx: dict[str, object], sh: str) -> _Res:
     result = k3_eval(expr, ctx, sh)
     if isinstance(result, Nothing):
         return result
@@ -173,7 +171,7 @@ def _eval_not(expr: K3l, ctx: dict[str, object], sh: str) -> _Res:
     return Some(not checked.val)
 
 
-def _eval_if(c: K3l, t: K3l, e: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_if(c: Expr, t: Expr, e: Expr, ctx: dict[str, object], sh: str) -> _Res:
     cond = k3_eval(c, ctx, sh)
     if isinstance(cond, Nothing):
         return cond
@@ -183,7 +181,7 @@ def _eval_if(c: K3l, t: K3l, e: K3l, ctx: dict[str, object], sh: str) -> _Res:
     return k3_eval(t, ctx, sh) if checked.val is True else k3_eval(e, ctx, sh)
 
 
-def _eval_implies(le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_implies(le: Expr, re: Expr, ctx: dict[str, object], sh: str) -> _Res:
     left = k3_eval(le, ctx, sh)
     if isinstance(left, Nothing):
         return left
@@ -195,7 +193,7 @@ def _eval_implies(le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
     return k3_eval(re, ctx, sh)
 
 
-def _eval_binary(fn: Any, le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_binary(fn: Any, le: Expr, re: Expr, ctx: dict[str, object], sh: str) -> _Res:
     lv = k3_eval(le, ctx, sh)
     if isinstance(lv, Nothing):
         return lv
@@ -208,7 +206,7 @@ def _eval_binary(fn: Any, le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> 
         return _nothing("type-error", sh)
 
 
-def _eval_div(le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_div(le: Expr, re: Expr, ctx: dict[str, object], sh: str) -> _Res:
     lv = k3_eval(le, ctx, sh)
     if isinstance(lv, Nothing):
         return lv
@@ -223,7 +221,7 @@ def _eval_div(le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
         return _nothing("type-error", sh)
 
 
-def _eval_mod(le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_mod(le: Expr, re: Expr, ctx: dict[str, object], sh: str) -> _Res:
     lv = k3_eval(le, ctx, sh)
     if isinstance(lv, Nothing):
         return lv
@@ -238,7 +236,7 @@ def _eval_mod(le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
         return _nothing("type-error", sh)
 
 
-def _eval_unary_numeric(expr: K3l, fn: Any, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_unary_numeric(expr: Expr, fn: Any, ctx: dict[str, object], sh: str) -> _Res:
     result = k3_eval(expr, ctx, sh)
     if isinstance(result, Nothing):
         return result
@@ -258,7 +256,7 @@ def _eval_temporal(ctx: dict[str, object], key: str, field: str, sh: str) -> _Re
     return _nothing(f"{prefix}.{field}", sh)
 
 
-def _eval_index(expr: K3l, idx: int, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_index(expr: Expr, idx: int, ctx: dict[str, object], sh: str) -> _Res:
     result = k3_eval(expr, ctx, sh)
     if isinstance(result, Nothing):
         return result
@@ -268,7 +266,13 @@ def _eval_index(expr: K3l, idx: int, ctx: dict[str, object], sh: str) -> _Res:
 
 
 def _eval_quantifier(
-    var: str, coll: K3l, pred: K3l, ctx: dict[str, object], sh: str, *, is_forall: bool
+    var: str,
+    coll: Expr,
+    pred: Expr,
+    ctx: dict[str, object],
+    sh: str,
+    *,
+    is_forall: bool,
 ) -> _Res:
     coll_r = k3_eval(coll, ctx, sh)
     if isinstance(coll_r, Nothing):
@@ -290,7 +294,7 @@ def _eval_quantifier(
     return Some(True if is_forall else False)
 
 
-def _eval_length(expr: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_length(expr: Expr, ctx: dict[str, object], sh: str) -> _Res:
     result = k3_eval(expr, ctx, sh)
     if isinstance(result, Nothing):
         return result
@@ -299,7 +303,7 @@ def _eval_length(expr: K3l, ctx: dict[str, object], sh: str) -> _Res:
     return _nothing("expected-sized", sh)
 
 
-def _eval_contains(coll: K3l, elem: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_contains(coll: Expr, elem: Expr, ctx: dict[str, object], sh: str) -> _Res:
     cv = k3_eval(coll, ctx, sh)
     if isinstance(cv, Nothing):
         return cv
@@ -313,7 +317,9 @@ def _eval_contains(coll: K3l, elem: K3l, ctx: dict[str, object], sh: str) -> _Re
     return _nothing("expected-collection", sh)
 
 
-def _eval_map(var: str, coll: K3l, body: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_map(
+    var: str, coll: Expr, body: Expr, ctx: dict[str, object], sh: str
+) -> _Res:
     coll_r = k3_eval(coll, ctx, sh)
     if isinstance(coll_r, Nothing):
         return coll_r
@@ -330,7 +336,7 @@ def _eval_map(var: str, coll: K3l, body: K3l, ctx: dict[str, object], sh: str) -
 
 
 def _eval_filter(
-    var: str, coll: K3l, pred: K3l, ctx: dict[str, object], sh: str
+    var: str, coll: Expr, pred: Expr, ctx: dict[str, object], sh: str
 ) -> _Res:
     coll_r = k3_eval(coll, ctx, sh)
     if isinstance(coll_r, Nothing):
@@ -352,11 +358,11 @@ def _eval_filter(
 
 
 def _eval_fold(
-    init: K3l,
-    coll: K3l,
+    init: Expr,
+    coll: Expr,
     acc_var: str,
     elem_var: str,
-    body: K3l,
+    body: Expr,
     ctx: dict[str, object],
     sh: str,
 ) -> _Res:
@@ -376,7 +382,7 @@ def _eval_fold(
     return acc
 
 
-def _eval_concat(le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_concat(le: Expr, re: Expr, ctx: dict[str, object], sh: str) -> _Res:
     lv = k3_eval(le, ctx, sh)
     if isinstance(lv, Nothing):
         return lv
@@ -388,7 +394,7 @@ def _eval_concat(le: K3l, re: K3l, ctx: dict[str, object], sh: str) -> _Res:
     return _nothing("expected-string", sh)
 
 
-def _eval_trim(expr: K3l, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_trim(expr: Expr, ctx: dict[str, object], sh: str) -> _Res:
     result = k3_eval(expr, ctx, sh)
     if isinstance(result, Nothing):
         return result
@@ -398,7 +404,7 @@ def _eval_trim(expr: K3l, ctx: dict[str, object], sh: str) -> _Res:
 
 
 def _eval_slice(
-    expr: K3l, start: K3l, end: K3l, ctx: dict[str, object], sh: str
+    expr: Expr, start: Expr, end: Expr, ctx: dict[str, object], sh: str
 ) -> _Res:
     ev = k3_eval(expr, ctx, sh)
     if isinstance(ev, Nothing):
@@ -414,7 +420,7 @@ def _eval_slice(
     return _nothing("expected-sliceable", sh)
 
 
-def _eval_matches(expr: K3l, pattern: str, ctx: dict[str, object], sh: str) -> _Res:
+def _eval_matches(expr: Expr, pattern: str, ctx: dict[str, object], sh: str) -> _Res:
     result = k3_eval(expr, ctx, sh)
     if isinstance(result, Nothing):
         return result
@@ -424,7 +430,7 @@ def _eval_matches(expr: K3l, pattern: str, ctx: dict[str, object], sh: str) -> _
 
 
 def _eval_record(
-    fields: tuple[tuple[str, K3l], ...], ctx: dict[str, object], sh: str
+    fields: tuple[tuple[str, Expr], ...], ctx: dict[str, object], sh: str
 ) -> _Res:
     result_dict: dict[str, object] = {}
     for name, expr in fields:
@@ -436,7 +442,7 @@ def _eval_record(
 
 
 def _eval_with(
-    base: K3l, updates: tuple[tuple[str, K3l], ...], ctx: dict[str, object], sh: str
+    base: Expr, updates: tuple[tuple[str, Expr], ...], ctx: dict[str, object], sh: str
 ) -> _Res:
     bv = k3_eval(base, ctx, sh)
     if isinstance(bv, Nothing):
@@ -452,7 +458,7 @@ def _eval_with(
     return Some(result_dict)
 
 
-def _eval_llist(elements: tuple[K3l, ...], ctx: dict[str, object], sh: str) -> _Res:
+def _eval_llist(elements: tuple[Expr, ...], ctx: dict[str, object], sh: str) -> _Res:
     results = []
     for elem in elements:
         result = k3_eval(elem, ctx, sh)
@@ -462,21 +468,21 @@ def _eval_llist(elements: tuple[K3l, ...], ctx: dict[str, object], sh: str) -> _
     return Some(results)
 
 
-# ── k3_eval() — total interpreter ───────────────────────────────────────────
+# -- k3_eval() - total interpreter ---------------------------------------------
 
 
 def k3_eval(
-    expr: K3l,
+    expr: Expr,
     ctx: dict[str, object],
     step_hash: str = "",
 ) -> _Res:
     """
-    Evaluate a K3l expression against a context.
+    Evaluate a K3 expression against a context.
 
     Total: always returns Some(value) or Nothing(field, step_hash).
     Never raises. Nothing propagates through every compound expression.
 
-    ctx is a flat dict — typically:
+    ctx is a flat dict - typically:
         {"state": {...}, "event": {...}, "__ctx__": SpecCtx}
 
     step_hash is threaded into every Nothing for audit trail continuity.

@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from k3c.spec.result import Why
+    from k3c.engine.result import Why
 
 
 class K3Error(Exception):

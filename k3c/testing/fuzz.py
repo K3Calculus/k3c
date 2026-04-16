@@ -1,18 +1,11 @@
-# k3c/universe/fuzz.py
+# k3c/testing/fuzz.py
 """
 Property-based fuzzing for K3 Universes.
 
 fuzz() generates random event sequences and runs them through a Universe,
-looking for invariant violations. When a violation is found, it shrinks
-the event sequence to the minimal reproducing case.
+looking for invariant violations. When found, it shrinks to the minimal case.
 
-This is the primary mechanism for discharging well-formedness rule 8:
-  N(S₀) ∧ G(s,e) ⇒ N(T(s,e))
-
-Usage:
-    report = u.fuzz(sequences=1000, steps=100, seed=42)
-    if not report.passed:
-        print(report.violations[0].shrunk_sequence)
+Discharges well-formedness rule 8: N(S0) AND G(s,e) => N(T(s,e))
 """
 
 from __future__ import annotations
@@ -22,27 +15,14 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from k3c.spec.result import Impossible, Violated
-
-
-# ── Event generator protocol ────────────────────────────────────────────────
-
+from k3c.engine.result import Impossible, Violated
 
 type EventGenerator = Callable[[dict[str, object], random.Random], dict[str, object]]
 
 
-# ── FuzzViolation ────────────────────────────────────────────────────────────
-
-
 @dataclass(frozen=True)
 class FuzzViolation:
-    """A violation found during fuzzing.
-
-    original_sequence: the full event sequence that triggered the violation
-    shrunk_sequence: the minimal reproducing subsequence (after shrinking)
-    violated: the Violated result with full Why context
-    step_index: which step in the sequence produced the violation
-    """
+    """A violation found during fuzzing."""
 
     original_sequence: tuple[dict[str, object], ...]
     shrunk_sequence: tuple[dict[str, object], ...]
@@ -50,21 +30,9 @@ class FuzzViolation:
     step_index: int
 
 
-# ── FuzzReport ──────────────────────────────────────────────────────────────
-
-
 @dataclass(frozen=True)
 class FuzzReport:
-    """Result of a fuzz run.
-
-    passed: True if no violations found
-    violations: list of FuzzViolation (typically stops at first)
-    sequences_run: how many event sequences were tested
-    total_steps: total number of apply() calls across all sequences
-    impossible_count: how many events were rejected by guards (not bugs)
-    elapsed_ms: wall-clock time in milliseconds
-    seed: the RNG seed used (for reproducibility)
-    """
+    """Result of a fuzz run."""
 
     passed: bool
     violations: tuple[FuzzViolation, ...]
@@ -86,17 +54,10 @@ class FuzzReport:
         }
 
 
-# ── Default event generator ─────────────────────────────────────────────────
-
-
 def _default_event_generator(
     event_types: list[str],
     field_ranges: dict[str, tuple[int, int]] | None = None,
 ) -> EventGenerator:
-    """Create a default event generator from permit clause event types.
-
-    Generates events with random type and random integer fields.
-    """
     ranges = field_ranges or {"amount": (0, 1000), "n": (0, 100)}
 
     def generate(state: dict[str, object], rng: random.Random) -> dict[str, object]:
@@ -111,8 +72,7 @@ def _default_event_generator(
 
 
 def _extract_event_types(compiled: object) -> list[str]:
-    """Extract event types from permit clauses' `on` filters."""
-    from k3c.lang.compile import CompiledSpec
+    from k3c.spec.compile import CompiledSpec
 
     if not isinstance(compiled, CompiledSpec):
         return []
@@ -120,13 +80,9 @@ def _extract_event_types(compiled: object) -> list[str]:
     for permit in compiled.permits:
         if permit.on is not None and permit.on not in types:
             types.append(permit.on)
-    # If no typed permits, add a generic event
     if not types:
         types.append("Event")
     return types
-
-
-# ── Shrinking ────────────────────────────────────────────────────────────────
 
 
 def _shrink(
@@ -134,14 +90,8 @@ def _shrink(
     apply_fn: Callable[[dict[str, object]], object],
     reset_fn: Callable[[], None],
 ) -> list[dict[str, object]]:
-    """Shrink an event sequence to the minimal reproducing case.
-
-    Binary search removal: try removing halves, then quarters, etc.
-    Then try removing individual events.
-    """
     current = list(events)
 
-    # Phase 1: try removing contiguous blocks (large to small)
     block_size = len(current) // 2
     while block_size >= 1:
         i = 0
@@ -151,9 +101,8 @@ def _shrink(
                 current = candidate
             else:
                 i += 1
-        block_size //= 2
+            block_size //= 2
 
-    # Phase 2: try removing individual events
     i = 0
     while i < len(current):
         candidate = current[:i] + current[i + 1 :]
@@ -165,21 +114,13 @@ def _shrink(
     return current
 
 
-def _reproduces_violation(
-    events: list[dict[str, object]],
-    apply_fn: Callable[[dict[str, object]], object],
-    reset_fn: Callable[[], None],
-) -> bool:
-    """Check if an event sequence still produces a Violated result."""
+def _reproduces_violation(events, apply_fn, reset_fn) -> bool:
     reset_fn()
     for event in events:
         result = apply_fn(event)
         if isinstance(result, Violated):
             return True
     return False
-
-
-# ── Core fuzz loop ──────────────────────────────────────────────────────────
 
 
 def fuzz(
@@ -192,19 +133,8 @@ def fuzz(
     max_violations: int = 1,
     shrink: bool = True,
 ) -> FuzzReport:
-    """Run property-based fuzzing on a Universe.
-
-    universe: the Universe to fuzz
-    sequences: number of independent event sequences to generate
-    steps: max events per sequence
-    seed: RNG seed for reproducibility (0 = time-based)
-    event_generator: custom event generator, or None for auto-detection
-    max_violations: stop after this many violations (default: 1)
-    shrink: whether to shrink failing sequences (default: True)
-
-    Returns FuzzReport with violations, statistics, and timing.
-    """
-    from k3c.universe.universe import Universe
+    """Run property-based fuzzing on a Universe."""
+    from k3c.runtime.universe import Universe
 
     if not isinstance(universe, Universe):
         msg = f"fuzz() requires a Universe, got {type(universe).__name__}"
@@ -214,7 +144,7 @@ def fuzz(
     rng = random.Random(actual_seed)
 
     if event_generator is None:
-        event_types = _extract_event_types(universe.spec)
+        event_types = _extract_event_types(universe.compiled)
         event_generator = _default_event_generator(event_types)
 
     start = time.monotonic()
@@ -247,28 +177,21 @@ def fuzz(
     )
 
 
-def _run_sequence(
-    universe: object,
-    generator: EventGenerator,
-    rng: random.Random,
-    steps: int,
-    do_shrink: bool,
-) -> tuple[int, int, FuzzViolation | None]:
-    """Run one fuzz sequence. Returns (steps_run, impossible_count, violation_or_none)."""
-    universe.reset()  # type: ignore[union-attr]
+def _run_sequence(universe, generator, rng, steps, do_shrink):
+    universe.reset()
     sequence: list[dict[str, object]] = []
     impossible_count = 0
 
     for step_idx in range(steps):
-        event = generator(universe.state, rng)  # type: ignore[union-attr]
+        event = generator(universe.state, rng)
         sequence.append(event)
-        result = universe.apply(event)  # type: ignore[union-attr]
+        result = universe.apply(event)
 
         if isinstance(result, Violated):
             shrunk = sequence
             if do_shrink:
-                shrunk = _shrink(sequence, universe.apply, universe.reset)  # type: ignore[union-attr]
-                universe.reset()  # type: ignore[union-attr]
+                shrunk = _shrink(sequence, universe.apply, universe.reset)
+                universe.reset()
             return (
                 len(sequence),
                 impossible_count,

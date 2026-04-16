@@ -53,7 +53,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-q --tb=short"
+addopts = "-q --tb=short --import-mode=importlib"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
