@@ -1,6 +1,6 @@
 # k3c — Kulkarni Calculus Python SDK
 
-> k3c v0.3.1 | Python >=3.12 | MIT License
+> k3c v0.3.2 | Python >=3.12 | MIT License
 > Homepage: https://k3c.dev | Repository: https://github.com/K3Calculus/k3c
 
 ## What k3c Is

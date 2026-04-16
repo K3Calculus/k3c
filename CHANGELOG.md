@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.2 (2026-04-16)
+
+### Features
+
+- **Full Spec serde**: `spec_to_dict()` / `spec_from_dict()` for complete JSON round-trip of Spec with all clause types, extractors, decode plans, Validate, Severity
+- **IR serde for `AllOf`/`AnyOf`/`In`**: new expression nodes serialize and deserialize
+- **Top-level serde exports**: `expr_to_dict`, `expr_from_dict`, `type_to_dict`, `type_from_dict`, `spec_to_dict`, `spec_from_dict`
+
 ## v0.3.1 (2026-04-16)
 
 ### Features
