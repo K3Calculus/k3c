@@ -625,6 +625,13 @@ result.chunk_results   # tuple[ChunkResult, ...] — per-chunk detail
 result = parallel_reduce(transition=fn, specs=specs, chunks=chunks, workers=4)
 ```
 
+**Parallel error streaming:** When `on_error` is provided with `workers > 1`, an error
+universe (supervisor thread) mediates between workers and the callback via queues.
+Workers block on each error until the supervisor responds with an `ErrorAction`.
+The callback always runs in the main process — full per-event flow control works
+in both sequential and parallel mode. Uses fork-based multiprocessing; falls back
+to sequential on platforms without fork (Windows).
+
 ### ChunkResult
 
 ```python

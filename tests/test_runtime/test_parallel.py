@@ -285,3 +285,151 @@ class TestErrorStreaming:
         assert "offset=0" in r
         assert "Impossible" in r
         assert "not_too_large" in r
+
+
+class TestParallelErrorSupervisor:
+    """Tests for on_error with workers > 1 (queue-based supervisor)."""
+
+    def test_on_error_called_in_main_process(self):
+        """on_error callback runs in the main process for parallel workers."""
+        import os
+
+        main_pid = os.getpid()
+        callback_pids: list[int] = []
+
+        def handler(e: StepError) -> ErrorAction:
+            callback_pids.append(os.getpid())
+            return ErrorAction.SKIP
+
+        specs = [_guarded_spec(0), _guarded_spec(0)]
+        chunks = [
+            [{"type": "Inc", "n": 200}],  # rejected in chunk 0
+            [{"type": "Inc", "n": 300}],  # rejected in chunk 1
+        ]
+        result = parallel_reduce(
+            transition=_counter_t,
+            specs=specs,
+            chunks=chunks,
+            workers=2,
+            on_error=handler,
+        )
+        assert len(result.errors) == 2
+        assert all(pid == main_pid for pid in callback_pids)
+
+    def test_on_error_skip_parallel(self):
+        """SKIP action allows workers to continue past errors."""
+        specs = [_guarded_spec(0), _guarded_spec(0)]
+        chunks = [
+            [{"type": "Inc", "n": 5}, {"type": "Inc", "n": 200}, {"type": "Inc", "n": 3}],
+            [{"type": "Inc", "n": 300}, {"type": "Inc", "n": 7}],
+        ]
+
+        errors_seen: list[StepError] = []
+
+        def handler(e: StepError) -> ErrorAction:
+            errors_seen.append(e)
+            return ErrorAction.SKIP
+
+        result = parallel_reduce(
+            transition=_counter_t,
+            specs=specs,
+            chunks=chunks,
+            workers=2,
+            on_error=handler,
+        )
+        assert len(errors_seen) == 2
+        assert result.total_processed == 3  # 2 from chunk 0, 1 from chunk 1
+
+    def test_on_error_abort_chunk_parallel(self):
+        """ABORT_CHUNK stops the erroring chunk, others continue."""
+        specs = [_guarded_spec(0), _guarded_spec(0)]
+        chunks = [
+            [{"type": "Inc", "n": 200}, {"type": "Inc", "n": 5}],  # chunk 0 aborts
+            [{"type": "Inc", "n": 7}, {"type": "Inc", "n": 3}],  # chunk 1 ok
+        ]
+
+        def handler(e: StepError) -> ErrorAction:
+            return ErrorAction.ABORT_CHUNK
+
+        result = parallel_reduce(
+            transition=_counter_t,
+            specs=specs,
+            chunks=chunks,
+            workers=2,
+            on_error=handler,
+        )
+        assert result.total_processed == 2  # only chunk 1 processed
+        assert len(result.errors) == 1
+        assert result.chunk_results[0].aborted
+        assert not result.chunk_results[1].aborted
+
+    def test_on_error_abort_all_parallel(self):
+        """ABORT_ALL stops all workers."""
+        specs = [_guarded_spec(0), _guarded_spec(0)]
+        chunks = [
+            [{"type": "Inc", "n": 200}, {"type": "Inc", "n": 5}],
+            [{"type": "Inc", "n": 300}, {"type": "Inc", "n": 7}],
+        ]
+
+        def handler(e: StepError) -> ErrorAction:
+            return ErrorAction.ABORT_ALL
+
+        result = parallel_reduce(
+            transition=_counter_t,
+            specs=specs,
+            chunks=chunks,
+            workers=2,
+            on_error=handler,
+        )
+        # Both chunks should have aborted
+        assert all(cr.aborted for cr in result.chunk_results)
+
+    def test_error_identity_preserved_parallel(self):
+        """StepError carries correct chunk_index and offset in parallel mode."""
+        specs = [_guarded_spec(0), _guarded_spec(0)]
+        chunks = [
+            [{"type": "Inc", "n": 5}, {"type": "Inc", "n": 200}],  # error at offset 1
+            [{"type": "Inc", "n": 300}, {"type": "Inc", "n": 3}],  # error at offset 0
+        ]
+
+        errors_seen: list[StepError] = []
+
+        def handler(e: StepError) -> ErrorAction:
+            errors_seen.append(e)
+            return ErrorAction.SKIP
+
+        parallel_reduce(
+            transition=_counter_t,
+            specs=specs,
+            chunks=chunks,
+            workers=2,
+            on_error=handler,
+        )
+        assert len(errors_seen) == 2
+        by_chunk = {e.chunk_index: e for e in errors_seen}
+        assert by_chunk[0].offset == 1
+        assert by_chunk[0].why.event["n"] == 200
+        assert by_chunk[1].offset == 0
+        assert by_chunk[1].why.event["n"] == 300
+
+    def test_no_errors_no_supervisor_overhead(self):
+        """Clean runs with on_error don't break."""
+        specs = [_counter_spec(0), _counter_spec(0)]
+        chunks = [
+            [{"type": "Inc", "n": 1}],
+            [{"type": "Inc", "n": 2}],
+        ]
+
+        def handler(e: StepError) -> ErrorAction:
+            raise AssertionError("should not be called")
+
+        result = parallel_reduce(
+            transition=_counter_t,
+            specs=specs,
+            chunks=chunks,
+            workers=2,
+            on_error=handler,
+        )
+        assert result.passed
+        assert result.total_processed == 2
+        assert len(result.errors) == 0
