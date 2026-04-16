@@ -1,5 +1,5 @@
 """
-Example 10: FIX Protocol — Financial Information eXchange.
+Example 10: FIX Protocol -- Financial Information eXchange.
 
 Models FIX session and order management:
   - Session layer: Logon -> Active -> Logout (with sequence numbers)
@@ -11,13 +11,20 @@ Models FIX session and order management:
   - Bridge: order fills -> position tracking
   - Output: execution reports
 
-Demonstrates: full K3 capability — guards, invariants, liveness, korrelator,
-compose, bridge, outputs, projections, fuzz, explain.
+Demonstrates: full K3 capability -- Spec (frozen dataclass), Permit, Require,
+Maintain, Korrelator via EmbeddedRuntime, compose, bridge, outputs via hooks,
+projections via hooks, fuzz, explain.
 """
 
 from k3c import (
     Spec,
-    universe,
+    Permit,
+    Require,
+    Maintain,
+    Universe,
+    EmbeddedRuntime,
+    ComposedUniverse,
+    BridgedUniverse,
     Ok,
     Impossible,
     Always,
@@ -37,324 +44,333 @@ from k3c import (
 )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 #  FIX Session Layer
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 
-session_spec = (
-    Spec("fix_session")
-    .state0(
-        {
-            "status": "disconnected",
-            "seq_send": 0,
-            "seq_recv": 0,
-            "heartbeat_interval": 30,
-            "last_sent": 0,
-            "last_recv": 0,
-        }
-    )
-    # ── Guards: session state machine ────────────────────────────────────
-    .permit(
-        "logon_from_disconnected",
-        when=Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("disconnected")),
-        on="Logon",
-    )
-    .permit(
-        "active_session",
-        when=Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("active")),
-        on="SendMsg",
-    )
-    .permit(
-        "active_recv",
-        when=Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("active")),
-        on="RecvMsg",
-    )
-    .permit(
-        "active_heartbeat",
-        when=Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("active")),
-        on="Heartbeat",
-    )
-    .permit(
-        "logout_from_active",
-        when=Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("active")),
-        on="Logout",
-    )
-    # ── Require: track spec_state for sequence numbers ───────────────────
-    .require(
-        "track_send",
-        on="SendMsg",
-        transition=With(
-            Var("spec_state"),
-            (
+session_spec = Spec(
+    name="fix_session",
+    state0={
+        "status": "disconnected",
+        "seq_send": 0,
+        "seq_recv": 0,
+        "heartbeat_interval": 30,
+        "last_sent": 0,
+        "last_recv": 0,
+    },
+    permits=(
+        Permit(
+            name="logon_from_disconnected",
+            when=Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("disconnected")),
+            on="Logon",
+        ),
+        Permit(
+            name="active_session",
+            when=Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("active")),
+            on="SendMsg",
+        ),
+        Permit(
+            name="active_recv",
+            when=Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("active")),
+            on="RecvMsg",
+        ),
+        Permit(
+            name="active_heartbeat",
+            when=Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("active")),
+            on="Heartbeat",
+        ),
+        Permit(
+            name="logout_from_active",
+            when=Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("active")),
+            on="Logout",
+        ),
+    ),
+    requires=(
+        Require(
+            name="track_send",
+            on="SendMsg",
+            transition=With(
+                Var("spec_state"),
                 (
-                    "seq_send",
-                    Arith(ArithOp.ADD, Field(Var("spec_state"), "seq_send"), LInt(1)),
+                    (
+                        "seq_send",
+                        Arith(
+                            ArithOp.ADD, Field(Var("spec_state"), "seq_send"), LInt(1)
+                        ),
+                    ),
                 ),
             ),
         ),
-    )
-    .require(
-        "track_recv",
-        on="RecvMsg",
-        transition=With(
-            Var("spec_state"),
-            (
+        Require(
+            name="track_recv",
+            on="RecvMsg",
+            transition=With(
+                Var("spec_state"),
                 (
-                    "seq_recv",
-                    Arith(ArithOp.ADD, Field(Var("spec_state"), "seq_recv"), LInt(1)),
+                    (
+                        "seq_recv",
+                        Arith(
+                            ArithOp.ADD, Field(Var("spec_state"), "seq_recv"), LInt(1)
+                        ),
+                    ),
                 ),
             ),
         ),
-    )
-    # ── Safety invariants ────────────────────────────────────────────────
-    .maintain(
-        "seq_send_monotone",
-        expr=Always(Compare(CmpOp.GE, After("seq_send"), Before("seq_send"))),
-    )
-    .maintain(
-        "seq_recv_monotone",
-        expr=Always(Compare(CmpOp.GE, After("seq_recv"), Before("seq_recv"))),
-    )
-    # ── Korrelator: sequence numbers match ───────────────────────────────
-    .korrelate(
-        lift=lambda s: {"seq_send": s["seq_send"], "seq_recv": s["seq_recv"]},
-    )
-    # ── Projections ──────────────────────────────────────────────────────
-    .project(
-        "session_info",
-        lambda s: {
-            "status": s["status"],
-            "sent": s["seq_send"],
-            "received": s["seq_recv"],
-        },
-    )
-    .build()
+    ),
+    maintains=(
+        Maintain(
+            name="seq_send_monotone",
+            expr=Always(Compare(CmpOp.GE, After("seq_send"), Before("seq_send"))),
+        ),
+        Maintain(
+            name="seq_recv_monotone",
+            expr=Always(Compare(CmpOp.GE, After("seq_recv"), Before("seq_recv"))),
+        ),
+    ),
 )
 
 
-class FixSession:
-    def transition(self, state, event):
-        match event.get("type"):
-            case "Logon":
-                return {
-                    **state,
-                    "status": "active",
-                    "heartbeat_interval": event.get("heartbeat", 30),
-                }
-            case "SendMsg":
-                return {
-                    **state,
-                    "seq_send": state["seq_send"] + 1,
-                    "last_sent": event.get("timestamp", 0),
-                }
-            case "RecvMsg":
-                return {
-                    **state,
-                    "seq_recv": state["seq_recv"] + 1,
-                    "last_recv": event.get("timestamp", 0),
-                }
-            case "Heartbeat":
-                return {
-                    **state,
-                    "last_sent": event.get("timestamp", 0),
-                    "last_recv": event.get("timestamp", 0),
-                }
-            case "Logout":
-                return {**state, "status": "disconnected"}
-            case _:
-                return state
+def session_transition(state: dict, event: dict) -> dict:
+    match event.get("type"):
+        case "Logon":
+            return {
+                **state,
+                "status": "active",
+                "heartbeat_interval": event.get("heartbeat", 30),
+            }
+        case "SendMsg":
+            return {
+                **state,
+                "seq_send": state["seq_send"] + 1,
+                "last_sent": event.get("timestamp", 0),
+            }
+        case "RecvMsg":
+            return {
+                **state,
+                "seq_recv": state["seq_recv"] + 1,
+                "last_recv": event.get("timestamp", 0),
+            }
+        case "Heartbeat":
+            return {
+                **state,
+                "last_sent": event.get("timestamp", 0),
+                "last_recv": event.get("timestamp", 0),
+            }
+        case "Logout":
+            return {**state, "status": "disconnected"}
+        case _:
+            return state
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 #  FIX Order Management
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 
-order_spec = (
-    Spec("fix_orders")
-    .state0(
-        {
-            "orders": {},  # clordid -> order dict
-            "fills": [],  # execution history
-            "open_count": 0,
-            "total_count": 0,
-        }
-    )
-    .permit("ok", when=LBool(True))
-    # ── Safety: open count is non-negative ───────────────────────────────
-    .maintain(
-        "open_non_negative",
-        expr=Always(Compare(CmpOp.GE, Field(Var("state"), "open_count"), LInt(0))),
-    )
-    # ── Safety: total count never decreases ──────────────────────────────
-    .maintain(
-        "total_monotone",
-        expr=Always(Compare(CmpOp.GE, After("total_count"), Before("total_count"))),
-    )
-    # ── Projections ──────────────────────────────────────────────────────
-    .project(
-        "order_book",
-        lambda s: {
-            "open": s["open_count"],
-            "total": s["total_count"],
-            "fill_count": len(s["fills"]),
-        },
-    )
-    .project(
-        "fill_volume", lambda s: sum(f.get("qty", 0) for f in s["fills"]), kind="metric"
-    )
-    # ── Outputs: execution reports ───────────────────────────────────────
-    .output(
-        "exec_report",
-        lambda s, e, ns: {
-            "type": "ExecutionReport",
-            "clordid": e.get("clordid"),
-            "exec_type": e.get("type"),
-            "side": e.get("side", ""),
-            "qty": e.get("qty", 0),
-            "price": e.get("price", 0),
-        },
-    )
-    .build()
+order_spec = Spec(
+    name="fix_orders",
+    state0={
+        "orders": {},  # clordid -> order dict
+        "fills": [],  # execution history
+        "open_count": 0,
+        "total_count": 0,
+    },
+    permits=(Permit(name="ok", when=LBool(True)),),
+    maintains=(
+        # Safety: open count is non-negative
+        Maintain(
+            name="open_non_negative",
+            expr=Always(Compare(CmpOp.GE, Field(Var("state"), "open_count"), LInt(0))),
+        ),
+        # Safety: total count never decreases
+        Maintain(
+            name="total_monotone",
+            expr=Always(Compare(CmpOp.GE, After("total_count"), Before("total_count"))),
+        ),
+    ),
 )
 
 
-class FixOrderManager:
-    def transition(self, state, event):
-        match event.get("type"):
-            case "NewOrderSingle":
-                clordid = event["clordid"]
-                order = {
-                    "clordid": clordid,
-                    "side": event.get("side", "Buy"),
-                    "qty": event.get("qty", 0),
-                    "price": event.get("price", 0),
-                    "status": "pending",
-                    "filled_qty": 0,
-                }
-                return {
-                    **state,
-                    "orders": {**state["orders"], clordid: order},
-                    "open_count": state["open_count"] + 1,
-                    "total_count": state["total_count"] + 1,
-                }
+def order_transition(state: dict, event: dict) -> dict:
+    match event.get("type"):
+        case "NewOrderSingle":
+            clordid = event["clordid"]
+            order = {
+                "clordid": clordid,
+                "side": event.get("side", "Buy"),
+                "qty": event.get("qty", 0),
+                "price": event.get("price", 0),
+                "status": "pending",
+                "filled_qty": 0,
+            }
+            return {
+                **state,
+                "orders": {**state["orders"], clordid: order},
+                "open_count": state["open_count"] + 1,
+                "total_count": state["total_count"] + 1,
+            }
 
-            case "Ack":
-                clordid = event["clordid"]
-                orders = dict(state["orders"])
-                if clordid in orders:
-                    orders[clordid] = {**orders[clordid], "status": "acked"}
-                return {**state, "orders": orders}
+        case "Ack":
+            clordid = event["clordid"]
+            orders = dict(state["orders"])
+            if clordid in orders:
+                orders[clordid] = {**orders[clordid], "status": "acked"}
+            return {**state, "orders": orders}
 
-            case "Fill":
-                clordid = event["clordid"]
-                qty = event.get("qty", 0)
-                price = event.get("price", 0)
-                orders = dict(state["orders"])
-                fills = list(state["fills"])
-                open_count = state["open_count"]
+        case "Fill":
+            clordid = event["clordid"]
+            qty = event.get("qty", 0)
+            price = event.get("price", 0)
+            orders = dict(state["orders"])
+            fills = list(state["fills"])
+            open_count = state["open_count"]
 
-                if clordid in orders:
-                    order = orders[clordid]
-                    new_filled = order["filled_qty"] + qty
-                    if new_filled >= order["qty"]:
-                        orders[clordid] = {
-                            **order,
-                            "status": "filled",
-                            "filled_qty": new_filled,
-                        }
-                        open_count -= 1
-                    else:
-                        orders[clordid] = {
-                            **order,
-                            "status": "partial",
-                            "filled_qty": new_filled,
-                        }
-                    fills.append({"clordid": clordid, "qty": qty, "price": price})
+            if clordid in orders:
+                order = orders[clordid]
+                new_filled = order["filled_qty"] + qty
+                if new_filled >= order["qty"]:
+                    orders[clordid] = {
+                        **order,
+                        "status": "filled",
+                        "filled_qty": new_filled,
+                    }
+                    open_count -= 1
+                else:
+                    orders[clordid] = {
+                        **order,
+                        "status": "partial",
+                        "filled_qty": new_filled,
+                    }
+                fills.append({"clordid": clordid, "qty": qty, "price": price})
 
+            return {
+                **state,
+                "orders": orders,
+                "fills": fills,
+                "open_count": open_count,
+            }
+
+        case "Cancel":
+            clordid = event["clordid"]
+            orders = dict(state["orders"])
+            if clordid in orders and orders[clordid]["status"] not in (
+                "filled",
+                "cancelled",
+            ):
+                orders[clordid] = {**orders[clordid], "status": "cancelled"}
                 return {
                     **state,
                     "orders": orders,
-                    "fills": fills,
-                    "open_count": open_count,
+                    "open_count": state["open_count"] - 1,
                 }
+            return state
 
-            case "Cancel":
-                clordid = event["clordid"]
-                orders = dict(state["orders"])
-                if clordid in orders and orders[clordid]["status"] not in (
-                    "filled",
-                    "cancelled",
-                ):
-                    orders[clordid] = {**orders[clordid], "status": "cancelled"}
-                    return {
-                        **state,
-                        "orders": orders,
-                        "open_count": state["open_count"] - 1,
-                    }
-                return state
-
-            case _:
-                return state
+        case _:
+            return state
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 #  Position Tracking (Bridge target)
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 
-position_spec = (
-    Spec("positions")
-    .state0({"net_position": 0, "realized_pnl": 0.0, "trade_count": 0})
-    .permit("ok", when=LBool(True))
-    .maintain(
-        "trade_count_monotone",
-        expr=Always(Compare(CmpOp.GE, After("trade_count"), Before("trade_count"))),
-    )
-    .project(
-        "position_summary",
-        lambda s: {
-            "net": s["net_position"],
-            "pnl": s["realized_pnl"],
-            "trades": s["trade_count"],
-        },
-    )
-    .build()
+position_spec = Spec(
+    name="positions",
+    state0={"net_position": 0, "realized_pnl": 0.0, "trade_count": 0},
+    permits=(Permit(name="ok", when=LBool(True)),),
+    maintains=(
+        Maintain(
+            name="trade_count_monotone",
+            expr=Always(Compare(CmpOp.GE, After("trade_count"), Before("trade_count"))),
+        ),
+    ),
 )
 
 
-class PositionTracker:
-    def transition(self, state, event):
-        if event.get("type") == "TradeUpdate":
-            side = event.get("side", "Buy")
-            qty = event.get("qty", 0)
-            delta = qty if side == "Buy" else -qty
-            return {
-                **state,
-                "net_position": state["net_position"] + delta,
-                "trade_count": state["trade_count"] + 1,
-            }
-        return state
+def position_transition(state: dict, event: dict) -> dict:
+    if event.get("type") == "TradeUpdate":
+        side = event.get("side", "Buy")
+        qty = event.get("qty", 0)
+        delta = qty if side == "Buy" else -qty
+        return {
+            **state,
+            "net_position": state["net_position"] + delta,
+            "trade_count": state["trade_count"] + 1,
+        }
+    return state
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 #  Main
-# ═══════════════════════════════════════════════════════════════════════════════
+# =============================================================================
 
 
 def main():
-    session_u = universe(FixSession(), session_spec)
-    order_u = universe(FixOrderManager(), order_spec)
-    position_u = universe(PositionTracker(), position_spec)
+    # EmbeddedRuntime for session korrelator and projections
+    session_runtime = EmbeddedRuntime(
+        spec=session_spec,
+        transition=session_transition,
+        projection_hooks={
+            "session_info": lambda s, e, ctx: {
+                "status": s["status"],
+                "sent": s["seq_send"],
+                "received": s["seq_recv"],
+            },
+        },
+        korrelate_hook=lambda impl_state, spec_state: (
+            impl_state.get("seq_send") == spec_state.get("seq_send")
+            and impl_state.get("seq_recv") == spec_state.get("seq_recv")
+        ),
+    )
+    session_u = session_runtime.universe()
 
-    # ── Compose: session <||> orders ─────────────────────────────────────
+    # EmbeddedRuntime for orders with projections and output hooks
+    order_runtime = EmbeddedRuntime(
+        spec=order_spec,
+        transition=order_transition,
+        projection_hooks={
+            "order_book": lambda s, e, ctx: {
+                "open": s["open_count"],
+                "total": s["total_count"],
+                "fill_count": len(s["fills"]),
+            },
+            "fill_volume": lambda s, e, ctx: sum(f.get("qty", 0) for f in s["fills"]),
+        },
+        output_hooks={
+            "exec_report": lambda s, e, ns: {
+                "type": "ExecutionReport",
+                "clordid": e.get("clordid"),
+                "exec_type": e.get("type"),
+                "side": e.get("side", ""),
+                "qty": e.get("qty", 0),
+                "price": e.get("price", 0),
+            },
+        },
+    )
+    order_u = order_runtime.universe()
+
+    # EmbeddedRuntime for positions with projection hook
+    position_runtime = EmbeddedRuntime(
+        spec=position_spec,
+        transition=position_transition,
+        projection_hooks={
+            "position_summary": lambda s, e, ctx: {
+                "net": s["net_position"],
+                "pnl": s["realized_pnl"],
+                "trades": s["trade_count"],
+            },
+        },
+    )
+    position_u = position_runtime.universe()
+
+    # -- Compose: session <||> orders ------------------------------------------
     def router(event):
         t = event.get("type", "")
         if t in ("Logon", "Logout", "SendMsg", "RecvMsg", "Heartbeat"):
             return "left"
         return "right"
 
-    fix_engine = session_u.compose(order_u, router)
+    fix_engine = ComposedUniverse(left=session_u, right=order_u, router=router)
 
-    # ── Bridge: orders -> positions ──────────────────────────────────────
+    # -- Bridge: orders -> positions -------------------------------------------
     def fill_to_position(src_state, event, new_state):
         if event.get("type") == "Fill":
             return {
@@ -365,13 +381,14 @@ def main():
             }
         return None
 
-    full_system = fix_engine.bridge(
-        position_u,
+    full_system = BridgedUniverse(
+        source=fix_engine,
+        target=position_u,
         mapper=fill_to_position,
         mode=BridgeMode.SYNCHRONOUS,
     )
 
-    # ── Scenario: FIX trading session ────────────────────────────────────
+    # -- Scenario: FIX trading session -----------------------------------------
     print("=== FIX Trading Session ===\n")
 
     # 1. Session logon
@@ -461,7 +478,7 @@ def main():
     assert isinstance(r, Ok)
     print(f"6. Logout: session={full_system.state['source']['left']['status']}")
 
-    # ── Final state ──────────────────────────────────────────────────────
+    # -- Final state -----------------------------------------------------------
     print("\n=== Final State ===")
     print(f"Session: {full_system.state['source']['left']}")
     orders_state = full_system.state["source"]["right"]
@@ -470,23 +487,24 @@ def main():
     )
     print(f"Positions: {full_system.state['target']}")
 
-    # ── Post-logout: cannot send messages ────────────────────────────────
+    # -- Post-logout: cannot send messages -------------------------------------
     r = full_system.apply({"type": "SendMsg", "timestamp": 200})
     assert isinstance(r, Impossible)
-    print(f"\nSend after logout: {r.why.rule} — REJECTED")
+    print(f"\nSend after logout: {r.why.rule} -- REJECTED")
 
-    # ── Fuzz the order system independently ──────────────────────────────
-    order_u2 = universe(FixOrderManager(), order_spec)
+    # -- Fuzz the order system independently -----------------------------------
+    # fuzz() requires a plain Universe (not EmbeddedUniverse)
+    order_u2 = Universe(spec=order_spec, transition=order_transition)
     report = order_u2.fuzz(sequences=100, steps=30, seed=42)
     print(f"\nFuzz orders: passed={report.passed}, steps={report.total_steps}")
 
-    # ── Explain a rejection ──────────────────────────────────────────────
-    session_u2 = universe(FixSession(), session_spec)
+    # -- Explain a rejection ---------------------------------------------------
+    session_u2 = Universe(spec=session_spec, transition=session_transition)
     explanation = session_u2.explain({"type": "SendMsg", "timestamp": 1})
     print(f"Explain send before logon: {type(explanation.result).__name__}")
     for entry in explanation.trace:
         if entry.verdict.value in ("fail", "skip"):
-            print(f"  {entry.phase}: {entry.clause} — {entry.detail}")
+            print(f"  {entry.phase}: {entry.clause} -- {entry.detail}")
 
     print("\nFIX protocol example passed.")
 

@@ -1,17 +1,21 @@
 """
-Example 05: Rate Limiter — Sliding window with bounded liveness.
+Example 05: Rate Limiter -- Sliding window with bounded liveness.
 
 A rate limiter that allows N requests per window. Uses timestamps in events
 (determinism rule: no now() in transitions).
 
-Demonstrates: Within (bounded liveness), ForAll, timestamp-based guards.
+Demonstrates: Spec (frozen dataclass), Permit guards, Maintain invariants,
+              EmbeddedRuntime for projection hooks, Universe for fuzz.
 """
 
 from k3c import (
     Spec,
-    universe,
+    Permit,
+    Maintain,
+    Universe,
     Ok,
     Impossible,
+    EmbeddedRuntime,
     Always,
     Compare,
     CmpOp,
@@ -22,91 +26,99 @@ from k3c import (
 )
 
 
-# ── Spec ────────────────────────────────────────────────────────────────────
+# -- Spec (declarative, frozen dataclass) --------------------------------------
 
 MAX_REQUESTS = 5
 WINDOW_SECONDS = 60
 
-rate_spec = (
-    Spec("rate_limiter")
-    .state0(
-        {
-            "request_count": 0,
-            "window_start": 0,
-            "total_requests": 0,
-            "total_rejected": 0,
-        }
-    )
-    # Guard: under rate limit
-    .permit(
-        "under_limit",
-        when=Compare(
-            CmpOp.LT, Field(Var("state"), "request_count"), LInt(MAX_REQUESTS)
+rate_spec = Spec(
+    name="rate_limiter",
+    state0={
+        "request_count": 0,
+        "window_start": 0,
+        "total_requests": 0,
+        "total_rejected": 0,
+    },
+    permits=(
+        # Guard: under rate limit
+        Permit(
+            name="under_limit",
+            when=Compare(
+                CmpOp.LT, Field(Var("state"), "request_count"), LInt(MAX_REQUESTS)
+            ),
+            on="Request",
         ),
-        on="Request",
-    )
-    # Guard: reset is always allowed
-    .permit("reset_ok", when=LBool(True), on="ResetWindow")
-    # Invariant: request count never exceeds max
-    .maintain(
-        "max_requests",
-        expr=Always(
-            Compare(CmpOp.LE, Field(Var("state"), "request_count"), LInt(MAX_REQUESTS))
+        # Guard: reset is always allowed
+        Permit(name="reset_ok", when=LBool(True), on="ResetWindow"),
+    ),
+    maintains=(
+        # Invariant: request count never exceeds max
+        Maintain(
+            name="max_requests",
+            expr=Always(
+                Compare(
+                    CmpOp.LE,
+                    Field(Var("state"), "request_count"),
+                    LInt(MAX_REQUESTS),
+                )
+            ),
         ),
-    )
-    # Invariant: total_requests >= request_count
-    .maintain(
-        "total_consistency",
-        expr=Always(
-            Compare(
-                CmpOp.GE,
-                Field(Var("state"), "total_requests"),
-                Field(Var("state"), "request_count"),
-            )
+        # Invariant: total_requests >= request_count
+        Maintain(
+            name="total_consistency",
+            expr=Always(
+                Compare(
+                    CmpOp.GE,
+                    Field(Var("state"), "total_requests"),
+                    Field(Var("state"), "request_count"),
+                )
+            ),
         ),
-    )
-    # Projections
-    .project("remaining", lambda s: MAX_REQUESTS - s["request_count"])
-    .project(
-        "stats",
-        lambda s: {
-            "total": s["total_requests"],
-            "rejected": s["total_rejected"],
-            "current_window": s["request_count"],
-        },
-        kind="metric",
-    )
-    .build()
+    ),
 )
 
 
-# ── System ──────────────────────────────────────────────────────────────────
+# -- Transition function (plain function, no System class) ---------------------
 
 
-class RateLimiterSystem:
-    def transition(self, state, event):
-        match event.get("type"):
-            case "Request":
-                return {
-                    **state,
-                    "request_count": state["request_count"] + 1,
-                    "total_requests": state["total_requests"] + 1,
-                }
-            case "ResetWindow":
-                return {
-                    **state,
-                    "request_count": 0,
-                    "window_start": event.get("timestamp", 0),
-                }
-            case _:
-                return state
+def rate_transition(state: dict, event: dict) -> dict:
+    match event.get("type"):
+        case "Request":
+            return {
+                **state,
+                "request_count": state["request_count"] + 1,
+                "total_requests": state["total_requests"] + 1,
+            }
+        case "ResetWindow":
+            return {
+                **state,
+                "request_count": 0,
+                "window_start": event.get("timestamp", 0),
+            }
+        case _:
+            return state
 
 
-# ── Usage ───────────────────────────────────────────────────────────────────
+# -- Usage ---------------------------------------------------------------------
 
 
 def main():
-    u = universe(RateLimiterSystem(), rate_spec)
+    # EmbeddedRuntime for projection hooks
+    runtime = EmbeddedRuntime(
+        spec=rate_spec,
+        transition=rate_transition,
+        projection_hooks={
+            "remaining": lambda state, event, ctx: (
+                MAX_REQUESTS - state["request_count"]
+            ),
+            "stats": lambda state, event, ctx: {
+                "total": state["total_requests"],
+                "rejected": state["total_rejected"],
+                "current_window": state["request_count"],
+            },
+        },
+    )
+    u = runtime.universe()
 
     # Send requests up to the limit
     for i in range(MAX_REQUESTS):
@@ -117,7 +129,7 @@ def main():
     # Next request should be rejected
     r = u.apply({"type": "Request", "client": "user_1"})
     assert isinstance(r, Impossible)
-    print(f"Request {MAX_REQUESTS + 1}: REJECTED — {r.why.rule}")
+    print(f"Request {MAX_REQUESTS + 1}: REJECTED -- {r.why.rule}")
 
     # Reset window
     r = u.apply({"type": "ResetWindow", "timestamp": 60})
@@ -131,9 +143,9 @@ def main():
 
     print(f"\nStats: {u.state}")
 
-    # Fuzz
-    u.reset()
-    report = u.fuzz(sequences=100, steps=30, seed=42)
+    # Fuzz (Universe supports fuzz; EmbeddedUniverse does not)
+    u_fuzz = Universe(spec=rate_spec, transition=rate_transition)
+    report = u_fuzz.fuzz(sequences=100, steps=30, seed=42)
     print(f"Fuzz: passed={report.passed}")
 
     print("\nRate limiter example passed.")

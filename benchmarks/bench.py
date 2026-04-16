@@ -607,7 +607,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-    print(r)
     print(f"\n{'=' * 80}")
     print(f"Total benchmarks: {len(results)}")
 
@@ -616,7 +615,3 @@ if __name__ == "__main__":
     slowest = max(results, key=lambda r: r.per_op_us)
     print(f"Fastest: {fastest.name} ({fastest.per_op_us:.1f} us/op)")
     print(f"Slowest: {slowest.name} ({slowest.per_op_us:.1f} us/op)")
-
-
-if __name__ == "__main__":
-    main()

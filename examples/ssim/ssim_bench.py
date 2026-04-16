@@ -8,7 +8,7 @@ Usage:
     uv run python examples/ssim/ssim_bench.py --quick
 
 Measures:
-    1. Raw decode throughput (bytes → dict)
+    1. Raw decode throughput (bytes -> dict)
     2. apply() throughput (single record through full pipeline)
     3. stream() throughput (end-to-end with outputs)
     4. Comparison: blake3 vs sha256 vs blake2b
@@ -22,11 +22,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from k3c import Ok, universe
-from k3c.spec.result import Impossible
+from k3c import Universe
 
 from ssim_extractors import (
-    RECORD_WIDTH,
     decode_record,
     extract_rt1,
     extract_rt2,
@@ -35,8 +33,8 @@ from ssim_extractors import (
     extract_rt5,
     records_from_file,
 )
-from ssim_spec import build_ssim_spec
-from ssim_system import SSIMSystem
+from ssim_spec import ssim_spec, validate_event
+from ssim_system import ssim_transition
 
 SAMPLE_DIR = Path(__file__).parent / "specs-json" / "sampledata"
 
@@ -80,8 +78,7 @@ def bench(name: str, fn, iterations: int) -> BenchResult:
 
 def bench_file(name: str, path: str, hash_fn: str = "blake3") -> BenchResult:
     """Benchmark end-to-end processing of an SSIM file."""
-    spec = build_ssim_spec()
-    u = universe(SSIMSystem(), spec, hash_fn=hash_fn)
+    u = Universe(spec=ssim_spec, transition=ssim_transition, hash_fn=hash_fn)
 
     start = time.perf_counter()
     count = 0
@@ -99,11 +96,7 @@ def bench_file(name: str, path: str, hash_fn: str = "blake3") -> BenchResult:
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 # Pre-built raw records for micro-benchmarks
-RAW_RT1 = (
-    b"1AIRLINE STANDARD SCHEDULE DATA SET"
-    + b" " * 156
-    + b"001000001"
-)
+RAW_RT1 = b"1AIRLINE STANDARD SCHEDULE DATA SET" + b" " * 156 + b"001000001"
 
 RAW_RT2 = (
     b"2UXX "
@@ -150,10 +143,7 @@ RAW_RT4 = (
 )
 RAW_RT4 = RAW_RT4 + b" " * (194 - len(RAW_RT4)) + b"000004"
 
-RAW_RT5 = (
-    b"5 XX "
-    + b"03DEC24"
-)
+RAW_RT5 = b"5 XX " + b"03DEC24"
 RAW_RT5 = RAW_RT5 + b" " * (187 - len(RAW_RT5)) + b"000989" + b"E" + b"000990"
 
 # Ensure all are exactly 200 bytes
@@ -185,16 +175,14 @@ def run_benchmarks(quick: bool = False) -> list[BenchResult]:
 
     # RT1 apply
     def bench_apply_rt1():
-        spec = build_ssim_spec()
-        u = universe(SSIMSystem(), spec, hash_fn="blake3")
+        u = Universe(spec=ssim_spec, transition=ssim_transition, hash_fn="blake3")
         u.apply(extract_rt1(RAW_RT1))
 
     results.append(bench("apply(RT1, blake3)", bench_apply_rt1, n_small))
 
     # RT3 apply (set up state first, then measure RT3)
     def bench_apply_rt3():
-        spec = build_ssim_spec()
-        u = universe(SSIMSystem(), spec, hash_fn="blake3")
+        u = Universe(spec=ssim_spec, transition=ssim_transition, hash_fn="blake3")
         u.apply(extract_rt1(RAW_RT1))
         u.apply(extract_rt2(RAW_RT2))
         # Measure RT3
@@ -203,8 +191,7 @@ def run_benchmarks(quick: bool = False) -> list[BenchResult]:
     results.append(bench("apply(RT3, blake3)", bench_apply_rt3, n_small))
 
     # Steady-state: repeated RT3 apply (amortized setup)
-    spec = build_ssim_spec()
-    u_steady = universe(SSIMSystem(), spec, hash_fn="blake3")
+    u_steady = Universe(spec=ssim_spec, transition=ssim_transition, hash_fn="blake3")
     u_steady.apply(extract_rt1(RAW_RT1))
     u_steady.apply(extract_rt2(RAW_RT2))
     rt3_event = extract_rt3(RAW_RT3)
@@ -221,23 +208,19 @@ def run_benchmarks(quick: bool = False) -> list[BenchResult]:
     rt3_batch = make_rt3_events(n)
 
     def bench_steady_rt3():
-        nonlocal u_steady
-        spec = build_ssim_spec()
-        u_steady = universe(SSIMSystem(), spec, hash_fn="blake3")
-        u_steady.apply(extract_rt1(RAW_RT1))
-        u_steady.apply(extract_rt2(RAW_RT2))
+        u = Universe(spec=ssim_spec, transition=ssim_transition, hash_fn="blake3")
+        u.apply(extract_rt1(RAW_RT1))
+        u.apply(extract_rt2(RAW_RT2))
         for e in rt3_batch[:100]:
-            u_steady.apply(e)
+            u.apply(e)
 
-    results.append(
-        bench("apply(RT3x100, steady, blake3)", bench_steady_rt3, n_small)
-    )
+    results.append(bench("apply(RT3x100, steady, blake3)", bench_steady_rt3, n_small))
 
     # ── 3. Hash function comparison ─────────────────────────────────────
     for hf in ["blake3", "blake2b", "sha256"]:
+
         def bench_hash(hash_fn=hf):
-            spec = build_ssim_spec()
-            u = universe(SSIMSystem(), spec, hash_fn=hash_fn)
+            u = Universe(spec=ssim_spec, transition=ssim_transition, hash_fn=hash_fn)
             u.apply(extract_rt1(RAW_RT1))
             u.apply(extract_rt2(RAW_RT2))
             batch = make_rt3_events(50)
@@ -248,8 +231,7 @@ def run_benchmarks(quick: bool = False) -> list[BenchResult]:
 
     # ── 4. stream() throughput with outputs ─────────────────────────────
     def bench_stream_100():
-        spec = build_ssim_spec()
-        u = universe(SSIMSystem(), spec, hash_fn="blake3")
+        u = Universe(spec=ssim_spec, transition=ssim_transition, hash_fn="blake3")
         events = [extract_rt1(RAW_RT1), extract_rt2(RAW_RT2)]
         events.extend(make_rt3_events(100))
         for _ in u.stream(iter(events)):
@@ -259,8 +241,7 @@ def run_benchmarks(quick: bool = False) -> list[BenchResult]:
 
     # ── 5. reduce_all() throughput ──────────────────────────────────────
     def bench_reduce_500():
-        spec = build_ssim_spec()
-        u = universe(SSIMSystem(), spec, hash_fn="blake3")
+        u = Universe(spec=ssim_spec, transition=ssim_transition, hash_fn="blake3")
         events = [extract_rt1(RAW_RT1), extract_rt2(RAW_RT2)]
         events.extend(make_rt3_events(498))
         u.reduce_all(events)
@@ -268,8 +249,6 @@ def run_benchmarks(quick: bool = False) -> list[BenchResult]:
     results.append(bench("reduce_all(500 events, blake3)", bench_reduce_500, n_small))
 
     # ── 6. Validation overhead ────────────────────────────────────────────
-    from ssim_spec import validate_event
-
     rt3_ev = extract_rt3(RAW_RT3)
     rt4_ev = extract_rt4(RAW_RT4)
     results.append(bench("validate(RT3)", lambda: validate_event(rt3_ev), n))
@@ -299,7 +278,7 @@ def run_benchmarks(quick: bool = False) -> list[BenchResult]:
         if ei.exists():
             results.append(bench_file("file(EI.ssim, blake3)", str(ei), "blake3"))
 
-    # ── 9. Parallel benchmarks ──────────────────────────────────────────
+    # ── 9. Sequential block benchmarks ─────────────────────────────────
     from ssim_parallel import parallel_process
 
     multi = SAMPLE_DIR / "complex-multi-carrier.ssim"
@@ -313,7 +292,7 @@ def run_benchmarks(quick: bool = False) -> list[BenchResult]:
             per = (elapsed / total) * 1_000_000 if total > 0 else 0
             results.append(
                 BenchResult(
-                    f"parallel(multi-carrier, {w}w)",
+                    f"sequential(multi-carrier, {w}w)",
                     total,
                     elapsed * 1000,
                     ops,
@@ -349,9 +328,11 @@ def main():
     # Per-record cost summary for SSIM pipeline
     file_benches = [r for r in results if r.name.startswith("file(")]
     if file_benches:
-        print(f"\n--- SSIM Pipeline Cost ---")
+        print("\n--- SSIM Pipeline Cost ---")
         for fb in file_benches:
-            print(f"  {fb.name}: {fb.per_op_us:.1f} us/record ({fb.ops_per_sec:,.0f} records/s)")
+            print(
+                f"  {fb.name}: {fb.per_op_us:.1f} us/record ({fb.ops_per_sec:,.0f} records/s)"
+            )
 
 
 if __name__ == "__main__":

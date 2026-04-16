@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 # examples/ssim/ssim_parallel.py
 """
-Parallel SSIM parser — single-pass dispatcher with multi-worker execution.
+Parallel SSIM parser -- carrier-block-level processing with parallel_reduce.
 
 Architecture:
     1. Sequential scan identifies carrier block boundaries (byte offsets)
-    2. RT1 processed in main thread
-    3. Each carrier block dispatched to workers via ChunkSource
-    4. Workers independently read their byte range from disk and stream
-       records through their own k3c Universe
-    5. Results merged deterministically
+    2. Each carrier block gets a sliced Spec via spec.slice()
+    3. All blocks processed in parallel via parallel_reduce()
+    4. Results merged deterministically
 
 Usage:
     uv run python examples/ssim/ssim_parallel.py <file> [--workers N]
@@ -22,16 +20,16 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from k3c import ChunkSource, Ok, parallel_reduce
+from k3c import Ok, parallel_reduce, ChunkSource
 
 from ssim_extractors import RECORD_WIDTH, decode_record
-from ssim_spec import INITIAL_STATE, build_ssim_spec
-from ssim_system import SSIMSystem
+from ssim_spec import INITIAL_STATE, ssim_spec
+from ssim_system import ssim_transition
 
 SAMPLE_DIR = Path(__file__).parent / "specs-json" / "sampledata"
 
 
-# ── Carrier block boundary ──────────────────────────────────────────────────
+# -- Carrier block boundary ----------------------------------------------------
 
 
 @dataclass
@@ -41,20 +39,16 @@ class CarrierBlock:
     airline: str
     time_mode: str
     rt2_serial: int
-    start_offset: int  # byte offset of RT2 line start
-    end_offset: int = -1  # byte offset of byte after RT5 line end
+    start_offset: int
+    end_offset: int = -1
     record_count: int = 0
 
 
-# ── Index scan ──────────────────────────────────────────────────────────────
+# -- Index scan ----------------------------------------------------------------
 
 
 def index_carrier_blocks(path: str) -> tuple[list[CarrierBlock], int]:
-    """Single-pass byte-offset scan for carrier block boundaries.
-
-    Reads the file line by line, records byte offsets of RT2/RT5 lines.
-    Returns (blocks, total_lines).
-    """
+    """Single-pass byte-offset scan for carrier block boundaries."""
     blocks: list[CarrierBlock] = []
     current: CarrierBlock | None = None
     total_lines = 0
@@ -66,7 +60,6 @@ def index_carrier_blocks(path: str) -> tuple[list[CarrierBlock], int]:
             raw = f.readline()
             if not raw:
                 break
-            # Strip newline for processing, keep offset pointing to line start
             line = raw.rstrip(b"\r\n")
             if len(line) < RECORD_WIDTH:
                 continue
@@ -85,7 +78,6 @@ def index_carrier_blocks(path: str) -> tuple[list[CarrierBlock], int]:
                 )
                 records_in_block = 1
             elif rt == ord("5") and current is not None:
-                # end_offset = byte after the RT5 line (including newline)
                 current.end_offset = f.tell()
                 current.record_count = records_in_block + 1
                 blocks.append(current)
@@ -97,17 +89,13 @@ def index_carrier_blocks(path: str) -> tuple[list[CarrierBlock], int]:
     return blocks, total_lines
 
 
-# ── Picklable chunk reader (top-level function for ProcessPoolExecutor) ────
+# -- Chunk reader (top-level for pickling) -------------------------------------
 
 
 def _read_chunk_from_disk(
     path: str, start_offset: int, end_offset: int
 ) -> list[dict[str, object]]:
-    """Read and decode a byte range from an SSIM file.
-
-    Called by workers in ProcessPoolExecutor — must be a top-level function
-    (picklable). Returns materialized event list for the chunk.
-    """
+    """Read and decode a byte range from an SSIM file."""
     events: list[dict[str, object]] = []
     with open(path, "rb") as f:
         f.seek(start_offset)
@@ -124,7 +112,7 @@ def _read_chunk_from_disk(
     return events
 
 
-# ── Parallel processing ────────────────────────────────────────────────────
+# -- Parallel carrier-block processing -----------------------------------------
 
 
 def parallel_process(
@@ -133,23 +121,24 @@ def parallel_process(
     workers: int = 4,
     verbose: bool = False,
 ) -> dict:
-    """Parse an SSIM file with parallel carrier block processing.
+    """Parse an SSIM file with parallel carrier-block processing.
 
     1. Index scan: find carrier block byte boundaries
-    2. Process RT1 in main thread
-    3. Build sliced specs per carrier block
-    4. Each worker reads its byte range from disk independently
-    5. parallel_reduce merges results
+    2. Build sliced specs per carrier block via spec.slice()
+    3. parallel_reduce() processes all blocks (parallel or sequential)
+    4. Results merged deterministically
     """
     t0 = time.perf_counter()
 
-    # ── Index scan ──────────────────────────────────────────────────────
+    # -- Index scan --------------------------------------------------------
     t_index = time.perf_counter()
     blocks, total_lines = index_carrier_blocks(path)
     index_ms = (time.perf_counter() - t_index) * 1000
 
     if verbose:
-        print(f"  Indexed {len(blocks)} carrier blocks from {total_lines:,} lines in {index_ms:.0f}ms")
+        print(
+            f"  Indexed {len(blocks)} carrier blocks from {total_lines:,} lines in {index_ms:.0f}ms"
+        )
         for b in blocks[:10]:
             print(
                 f"    {b.airline.strip():>3}: "
@@ -162,10 +151,7 @@ def parallel_process(
     if not blocks:
         return {"error": "No carrier blocks found", "lines": total_lines}
 
-    # ── Build specs and chunks ──────────────────────────────────────────
-    t_par = time.perf_counter()
-    unified_spec = build_ssim_spec()
-
+    # -- Build sliced specs and chunks -------------------------------------
     specs = []
     chunks: list[list[dict[str, object]] | ChunkSource] = []
 
@@ -175,28 +161,30 @@ def parallel_process(
             "phase": "AFTER_RT1",
             "serial": block.rt2_serial - 1,
         }
-        specs.append(unified_spec.slice(from_state=from_state))
+        chunk_spec = ssim_spec.slice(from_state=from_state)
+        specs.append(chunk_spec)
 
-        # Read chunk from disk — each worker gets a materialized list
-        # (ProcessPoolExecutor requires picklable data)
+        # Materialize events for this block
         chunk_events = _read_chunk_from_disk(path, block.start_offset, block.end_offset)
         chunks.append(chunk_events)
 
-    # ── Parallel execution ──────────────────────────────────────────────
+    # -- parallel_reduce ---------------------------------------------------
+    t_par = time.perf_counter()
     result = parallel_reduce(
-        SSIMSystem(),
-        specs,
-        chunks,
+        transition=ssim_transition,
+        specs=specs,
+        chunks=chunks,
         workers=workers,
         hash_fn="blake3",
     )
     par_ms = (time.perf_counter() - t_par) * 1000
     total_s = time.perf_counter() - t0
 
-    # ── Collect results ─────────────────────────────────────────────────
+    # -- Collect results ---------------------------------------------------
     total_flights = 0
     total_segments = 0
     carriers_done = 0
+
     for chunk_result in result.results:
         if isinstance(chunk_result.final, Ok):
             state = chunk_result.final.state
@@ -235,7 +223,7 @@ def parallel_process(
         print(f"  Violations:  {len(result.violations):>12,}")
         print(f"  Workers:     {workers:>12,}")
         print(f"  Index:       {index_ms:>12,.0f} ms")
-        print(f"  Parallel:    {par_ms:>12,.0f} ms")
+        print(f"  Processing:  {par_ms:>12,.0f} ms")
         print(f"  Total:       {total_s:>12,.2f} s")
         print(f"  Throughput:  {rps:>12,.0f} records/s")
 
@@ -244,14 +232,13 @@ def parallel_process(
             for chunk_idx, violated in result.violations:
                 block = blocks[chunk_idx]
                 print(
-                    f"    Chunk {chunk_idx} ({block.airline.strip()}): "
-                    f"{violated.why.message}"
+                    f"    Chunk {chunk_idx} ({block.airline.strip()}): {violated.why.message}"
                 )
 
     return summary
 
 
-# ── Main ────────────────────────────────────────────────────────────────────
+# -- Main ----------------------------------------------------------------------
 
 
 def main() -> None:
@@ -277,7 +264,7 @@ def main() -> None:
         files = [str(SAMPLE_DIR / f) for f in candidates if (SAMPLE_DIR / f).exists()]
 
     print("=" * 70)
-    print(f"SSIM Parallel Parser — k3c + blake3 ({workers} workers)")
+    print(f"SSIM Parallel Parser -- k3c + blake3 ({workers} workers)")
     print("=" * 70)
 
     for path in files:

@@ -5,8 +5,9 @@ SSIM k3c Spec — DFA guards, field validations, invariants, projections, output
 Encodes the SSIM Chapter 7 file structure as a k3c causal system:
   - Guards enforce the DFA + field-level validation from JSON-LD specs
   - Invariants enforce serial continuity, block balancing
-  - Projections compute file_summary and integrity_report
+  - Projections compute file_summary and integrity_report (via EmbeddedRuntime hooks)
   - Outputs emit complete flights (RT3 + nested RT4 segments) and carrier blocks
+    (via EmbeddedRuntime hooks)
 
 Field validations come from the JSON-LD record specs:
   - RT1: title_of_contents constant, record_serial_number == 1
@@ -29,12 +30,15 @@ from k3c import (
     Before,
     CmpOp,
     Compare,
+    EmbeddedRuntime,
     EventField,
     Field,
     Implies,
     LInt,
     LStr,
+    Maintain,
     Or,
+    Permit,
     Spec,
     Var,
 )
@@ -119,7 +123,7 @@ def validate_rt3(event: dict[str, object]) -> list[str]:
     if dep and arr and dep == arr:
         errors.append(f"RT3: departure_station == arrival_station ('{dep}')")
     svc = str(event.get("service_type", ""))
-    if svc and svc not in "JFCQGHPABMKLRWTUYD":
+    if svc and svc not in "JFCQGHPABMKLREONVPQTISFUMAGX":
         errors.append(f"RT3: invalid service_type '{svc}'")
     return errors
 
@@ -204,6 +208,17 @@ def _integrity_report(state: dict[str, object]) -> object:
     }
 
 
+# ── Projection hooks (new signature: state, event, ctx) ───────────────────
+
+
+def _file_summary_hook(state, event, ctx):
+    return _file_summary(state)
+
+
+def _integrity_report_hook(state, event, ctx):
+    return _integrity_report(state)
+
+
 # ── Outputs ─────────────────────────────────────────────────────────────────
 
 
@@ -278,47 +293,47 @@ def _phase_eq(val: str) -> Compare:
     return Compare(CmpOp.EQ, _phase, LStr(val))
 
 
-# ── Spec Builder ────────────────────────────────────────────────────────────
+# ── Spec (declarative, frozen dataclass) ───────────────────────────────────
 
-
-def build_ssim_spec() -> object:
-    """Build the SSIM Chapter 7 k3c Spec."""
-    return (
-        Spec("ssim_ch7")
-        .state0(INITIAL_STATE)
-        # ── Guards (DFA transitions) ────────────────────────────────────
-        .permit(
-            "rt1_permitted",
+ssim_spec = Spec(
+    name="ssim_ch7",
+    state0=INITIAL_STATE,
+    # ── Guards (DFA transitions) ────────────────────────────────────
+    permits=(
+        Permit(
+            name="rt1_permitted",
             when=_phase_eq("EXPECT_RT1"),
             on="RT1",
-        )
-        .permit(
-            "rt2_permitted",
+        ),
+        Permit(
+            name="rt2_permitted",
             when=Or(_phase_eq("AFTER_RT1"), _phase_eq("AFTER_RT5_CONTINUE")),
             on="RT2",
-        )
-        .permit(
-            "rt3_permitted",
+        ),
+        Permit(
+            name="rt3_permitted",
             when=Or(_phase_eq("IN_CARRIER"), _phase_eq("IN_FLIGHT")),
             on="RT3",
-        )
-        .permit(
-            "rt4_permitted",
+        ),
+        Permit(
+            name="rt4_permitted",
             when=_phase_eq("IN_FLIGHT"),
             on="RT4",
-        )
-        .permit(
-            "rt5_permitted",
+        ),
+        Permit(
+            name="rt5_permitted",
             when=Or(_phase_eq("IN_CARRIER"), _phase_eq("IN_FLIGHT")),
             on="RT5",
-        )
-        # ── Safety Invariants ───────────────────────────────────────────
-        #
-        # Serial continuity: next serial == prev serial + 1
-        # OR overflow: prev == 999999 and next == 2
-        # OR serial reset at carrier block boundary (concatenated files)
-        .maintain(
-            "serial_continuity",
+        ),
+    ),
+    # ── Safety Invariants ───────────────────────────────────────────
+    #
+    # Serial continuity: next serial == prev serial + 1
+    # OR overflow: prev == 999999 and next == 2
+    # OR serial reset at carrier block boundary (concatenated files)
+    maintains=(
+        Maintain(
+            name="serial_continuity",
             expr=Always(
                 Or(
                     # Normal: increment by 1
@@ -338,10 +353,10 @@ def build_ssim_spec() -> object:
                     ),
                 )
             ),
-        )
+        ),
         # Blocks balanced after RT5
-        .maintain(
-            "blocks_balanced_after_rt5",
+        Maintain(
+            name="blocks_balanced_after_rt5",
             expr=Always(
                 Implies(
                     Or(_phase_eq("END"), _phase_eq("AFTER_RT5_CONTINUE")),
@@ -352,20 +367,40 @@ def build_ssim_spec() -> object:
                     ),
                 )
             ),
-        )
-        # ── Projections ─────────────────────────────────────────────────
-        .project("file_summary", _file_summary, kind="derived")
-        .project("integrity_report", _integrity_report, kind="derived")
-        # ── Outputs ─────────────────────────────────────────────────────
-        # RT1 header
-        .output("header", _emit_header, on="RT1")
-        # RT2 carrier record
-        .output("carrier", _emit_carrier, on="RT2")
-        # Sealed flight (RT3 + nested RT4 segments) — emitted on RT3 and RT5
-        .output("sealed_flight_on_rt3", _emit_sealed_flight, on="RT3")
-        .output("sealed_flight_on_rt5", _emit_sealed_flight, on="RT5")
-        # RT5 carrier complete
-        .output("carrier_complete", _emit_carrier_complete, on="RT5")
-        # ── Build ───────────────────────────────────────────────────────
-        .build()
-    )
+        ),
+    ),
+)
+
+
+# ── EmbeddedRuntime (projections + outputs use Python callables) ───────────
+
+# Import the transition function (must be after ssim_spec is defined
+# to avoid circular imports — ssim_system imports validate_event from here)
+from ssim_system import ssim_transition  # noqa: E402
+
+ssim_runtime = EmbeddedRuntime(
+    spec=ssim_spec,
+    transition=ssim_transition,
+    projection_hooks={
+        "file_summary": _file_summary_hook,
+        "integrity_report": _integrity_report_hook,
+    },
+    output_hooks={
+        "header": lambda s, e, ns: (
+            _emit_header(s, e, ns) if e.get("type") == "RT1" else None
+        ),
+        "carrier": lambda s, e, ns: (
+            _emit_carrier(s, e, ns) if e.get("type") == "RT2" else None
+        ),
+        "sealed_flight_on_rt3": lambda s, e, ns: (
+            _emit_sealed_flight(s, e, ns) if e.get("type") == "RT3" else None
+        ),
+        "sealed_flight_on_rt5": lambda s, e, ns: (
+            _emit_sealed_flight(s, e, ns) if e.get("type") == "RT5" else None
+        ),
+        "carrier_complete": lambda s, e, ns: (
+            _emit_carrier_complete(s, e, ns) if e.get("type") == "RT5" else None
+        ),
+    },
+    hash_fn="blake3",
+)

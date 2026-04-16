@@ -3,7 +3,7 @@
 """
 SSIM Chapter 7 parser — end-to-end demo with k3c.
 
-Parses real SSIM files through a k3c Universe with:
+Parses real SSIM files through a k3c EmbeddedUniverse with:
   - DFA guard enforcement (structural validation)
   - Field-level validation (from JSON-LD specs)
   - Serial continuity invariant (integrity)
@@ -22,11 +22,10 @@ import sys
 import time
 from pathlib import Path
 
-from k3c import Impossible, Ok, Violated, universe
+from k3c import Impossible, Ok, Violated
 
 from ssim_extractors import records_from_file
-from ssim_spec import build_ssim_spec
-from ssim_system import SSIMSystem
+from ssim_spec import ssim_runtime
 
 SAMPLE_DIR = Path(__file__).parent / "specs-json" / "sampledata"
 
@@ -34,9 +33,8 @@ SAMPLE_DIR = Path(__file__).parent / "specs-json" / "sampledata"
 def process_file(
     path: str, *, verbose: bool = False, json_output: bool = False
 ) -> dict | None:
-    """Parse an SSIM file through a k3c Universe with streaming output."""
-    spec = build_ssim_spec()
-    u = universe(SSIMSystem(), spec, hash_fn="blake3")
+    """Parse an SSIM file through a k3c EmbeddedUniverse with streaming output."""
+    u = ssim_runtime.universe()
 
     header: dict | None = None
     carrier_records: list[dict] = []
@@ -66,7 +64,7 @@ def process_file(
                         if verbose:
                             print(
                                 f"  Carrier: "
-                                f"{str(out.get('airline_designator','')).strip()} "
+                                f"{str(out.get('airline_designator', '')).strip()} "
                                 f"time_mode={out['time_mode']} "
                                 f"{out['period_of_validity_from']}"
                                 f"-{out['period_of_validity_to']} "
@@ -78,8 +76,8 @@ def process_file(
                             segs = out.get("segments", [])
                             print(
                                 f"  Flight: "
-                                f"{str(out.get('airline_designator','')).strip()}"
-                                f"{str(out.get('flight_number','')).strip()} "
+                                f"{str(out.get('airline_designator', '')).strip()}"
+                                f"{str(out.get('flight_number', '')).strip()} "
                                 f"{out.get('departure_station')}"
                                 f"->{out.get('arrival_station')} "
                                 f"({out.get('aircraft_type')}) "
@@ -96,7 +94,7 @@ def process_file(
                         if verbose:
                             print(
                                 f"  Carrier done: "
-                                f"{str(out.get('airline_designator','')).strip()} "
+                                f"{str(out.get('airline_designator', '')).strip()} "
                                 f"({out['flight_count']} flights, "
                                 f"{out['segment_count']} segments, "
                                 f"cont={out['continuation_end_code']})"
