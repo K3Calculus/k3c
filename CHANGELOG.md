@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.1 (2026-04-16)
+
+### Features
+
+- **Error universe supervisor**: queue-based supervisor mediates between parallel workers and client `on_error` callback, giving full per-event flow control (`SKIP`, `ABORT_CHUNK`, `ABORT_ALL`) in parallel mode
+- Uses fork-based multiprocessing; falls back to sequential on Windows
+
 ## v0.2.0 (2026-04-16)
 
 ### Features
