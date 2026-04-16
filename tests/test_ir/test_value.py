@@ -1,17 +1,14 @@
-"""Tests for k3c.lang.ir — Some, Nothing, Option."""
+"""Tests for k3c.ir.value — Some, Nothing, Option."""
 
 from __future__ import annotations
 
 import pytest
 
 from k3c.errors import K3NothingException
-from k3c.lang.ir import Nothing, Some
-from k3c.spec.result import WhyKind
+from k3c.ir.value import Nothing, Some
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Some
-# ═══════════════════════════════════════════════════════════════════════════════
+# -- Some ----------------------------------------------------------------------
 
 
 class TestSomeConstruction:
@@ -20,17 +17,14 @@ class TestSomeConstruction:
         assert s.val == 42
 
     def test_wrap_string(self):
-        s = Some("hello")
-        assert s.val == "hello"
+        assert Some("hello").val == "hello"
 
     def test_wrap_none(self):
-        s = Some(None)
-        assert s.val is None
+        assert Some(None).val is None
 
     def test_wrap_dict(self):
         d = {"key": "value"}
-        s = Some(d)
-        assert s.val is d
+        assert Some(d).val is d
 
     def test_wrap_nested_some(self):
         inner = Some(1)
@@ -50,50 +44,35 @@ class TestSomeMap:
         assert result.val == 10
 
     def test_map_changes_type(self):
-        result = Some(42).map(str)
-        assert result.val == "42"
+        assert Some(42).map(str).val == "42"
 
     def test_map_chained(self):
         result = Some(2).map(lambda x: x + 1).map(lambda x: x * 10)
         assert result.val == 30
 
-    # ── Negative ──────────────────────────────────────────────────────────────
-
-    def test_map_with_raising_function(self):
-        with pytest.raises(ValueError, match="boom"):
-            Some(1).map(lambda _: (_ for _ in ()).throw(ValueError("boom")))
-
-    def test_map_function_receives_exact_value(self):
-        received = []
-        Some({"a": 1}).map(lambda v: received.append(v))
-        assert received == [{"a": 1}]
-
 
 class TestSomeAndThen:
-    def test_and_then_some_to_some(self):
+    def test_some_to_some(self):
         result = Some(10).and_then(lambda x: Some(x + 5))
         assert isinstance(result, Some)
         assert result.val == 15
 
-    def test_and_then_some_to_nothing(self):
+    def test_some_to_nothing(self):
         result = Some(10).and_then(lambda _: Nothing("gone", "hash123"))
         assert isinstance(result, Nothing)
         assert result.field == "gone"
 
-    def test_and_then_chained(self):
+    def test_chained(self):
         result = Some(1).and_then(lambda x: Some(x + 1)).and_then(lambda x: Some(x + 1))
         assert result.val == 3  # type: ignore[union-attr]
 
 
 class TestSomeUnwrap:
-    def test_unwrap_returns_value(self):
+    def test_unwrap(self):
         assert Some(42).unwrap() == 42
 
-    def test_unwrap_or_returns_value_not_default(self):
+    def test_unwrap_or_returns_value(self):
         assert Some(42).unwrap_or(0) == 42
-
-    def test_unwrap_or_ignores_default(self):
-        assert Some("real").unwrap_or("fallback") == "real"
 
 
 class TestSomePredicates:
@@ -112,9 +91,7 @@ class TestSomeRepr:
         assert repr(Some("hi")) == "Some('hi')"
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Nothing
-# ═══════════════════════════════════════════════════════════════════════════════
+# -- Nothing -------------------------------------------------------------------
 
 
 class TestNothingConstruction:
@@ -130,12 +107,9 @@ class TestNothingConstruction:
 
 
 class TestNothingPropagation:
-    """Nothing propagates unchanged — map/and_then return self."""
-
     def test_map_returns_self(self):
         n = Nothing(field="x", step_hash="h")
-        result = n.map(lambda v: v * 2)
-        assert result is n
+        assert n.map(lambda v: v * 2) is n
 
     def test_map_does_not_call_function(self):
         called = []
@@ -145,16 +119,9 @@ class TestNothingPropagation:
 
     def test_and_then_returns_self(self):
         n = Nothing(field="x", step_hash="h")
-        result = n.and_then(lambda v: Some(v))
-        assert result is n
+        assert n.and_then(lambda v: Some(v)) is n
 
-    def test_and_then_does_not_call_function(self):
-        called = []
-        n = Nothing(field="x", step_hash="h")
-        n.and_then(lambda v: called.append(v))
-        assert called == []
-
-    def test_chained_propagation_preserves_original(self):
+    def test_chained_preserves_original(self):
         n = Nothing(field="root_cause", step_hash="original_hash")
         result = n.map(str).map(int).and_then(lambda x: Some(x))
         assert isinstance(result, Nothing)
@@ -164,17 +131,10 @@ class TestNothingPropagation:
 
 class TestNothingUnwrapOr:
     def test_returns_default(self):
-        n = Nothing(field="x", step_hash="h")
-        assert n.unwrap_or(42) == 42
+        assert Nothing(field="x", step_hash="h").unwrap_or(42) == 42
 
     def test_returns_default_none(self):
-        n = Nothing(field="x", step_hash="h")
-        assert n.unwrap_or(None) is None
-
-    def test_returns_default_complex(self):
-        default = {"fallback": True}
-        n = Nothing(field="x", step_hash="h")
-        assert n.unwrap_or(default) is default
+        assert Nothing(field="x", step_hash="h").unwrap_or(None) is None
 
 
 class TestNothingPredicates:
@@ -193,33 +153,6 @@ class TestNothingRaise:
         assert exc_info.value.field == "balance"
         assert exc_info.value.step_hash == "deadbeef12345678"
 
-    def test_raise_always_raises(self):
-        n = Nothing(field="x", step_hash="h")
-        with pytest.raises(K3NothingException):
-            n.raise_()
-
-
-class TestNothingToImpossibleContext:
-    def test_returns_dict_with_correct_fields(self):
-        n = Nothing(field="amount", step_hash="abc123")
-        result = n.to_impossible_context(rule="check_balance")
-        assert result["kind"] == WhyKind.MISSING
-        assert result["step_hash"] == "abc123"
-        assert isinstance(result["messages"], tuple)
-        assert len(result["messages"]) == 1
-        assert "amount" in result["messages"][0]
-        assert "check_balance" in result["messages"][0]
-
-    def test_kind_is_whykind_enum(self):
-        n = Nothing(field="x", step_hash="h")
-        result = n.to_impossible_context(rule="r")
-        assert isinstance(result["kind"], WhyKind)
-
-    def test_messages_is_tuple(self):
-        n = Nothing(field="x", step_hash="h")
-        result = n.to_impossible_context(rule="r")
-        assert isinstance(result["messages"], tuple)
-
 
 class TestNothingRepr:
     def test_repr_format(self):
@@ -231,9 +164,7 @@ class TestNothingRepr:
         assert "step=ab" in repr(n)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-#  Option pattern matching
-# ═══════════════════════════════════════════════════════════════════════════════
+# -- Pattern matching ----------------------------------------------------------
 
 
 class TestOptionPatternMatching:

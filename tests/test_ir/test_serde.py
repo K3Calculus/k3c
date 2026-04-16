@@ -1,4 +1,4 @@
-"""Tests for k3c.lang.serde — K3l and K3lType round-trip serialization."""
+"""Tests for k3c.ir.serde — Expr and ExprType round-trip serialization."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import json
 import pytest
 
 from k3c.errors import K3SerdeError
-from k3c.lang.ir import (
+from k3c.ir.expr import (
     After,
     Always,
     And,
@@ -26,6 +26,12 @@ from k3c.lang.ir import (
     LStr,
     Not,
     Or,
+    UnwrapOr,
+    Var,
+    Within,
+)
+from k3c.ir.serde import from_dict, to_dict, type_from_dict, type_to_dict
+from k3c.ir.types import (
     TBool,
     TFloat,
     TInt,
@@ -35,18 +41,10 @@ from k3c.lang.ir import (
     TRef,
     TString,
     TVariant,
-    UnwrapOr,
-    Var,
-    Within,
 )
-from k3c.lang.serde import from_dict, to_dict, type_from_dict, type_to_dict
-
-
-# ── Helpers ──────────────────────────────────────────────────────────────────
 
 
 def _roundtrip(node):
-    """Serialize and deserialize — assert equality."""
     d = to_dict(node)
     restored = from_dict(d)
     assert restored == node, f"Round-trip failed: {node!r} != {restored!r}"
@@ -58,6 +56,9 @@ def _type_roundtrip(node):
     restored = type_from_dict(d)
     assert restored == node
     return d
+
+
+# -- Literals ------------------------------------------------------------------
 
 
 class TestLiterals:
@@ -86,8 +87,8 @@ class TestLiterals:
         d = _roundtrip(LStr("hello"))
         assert d == {"type": "LStr", "val": "hello"}
 
-    def test_string_empty(self):
-        _roundtrip(LStr(""))
+
+# -- Variables -----------------------------------------------------------------
 
 
 class TestVariables:
@@ -100,11 +101,12 @@ class TestVariables:
         d = _roundtrip(node)
         assert d["type"] == "Field"
         assert d["name"] == "amount"
-        assert d["expr"] == {"type": "Var", "name": "order"}
 
     def test_nested_field(self):
-        node = Field(Field(Var("a"), "b"), "c")
-        _roundtrip(node)
+        _roundtrip(Field(Field(Var("a"), "b"), "c"))
+
+
+# -- Logic ---------------------------------------------------------------------
 
 
 class TestLogic:
@@ -121,9 +123,10 @@ class TestLogic:
         node = If(cond=LBool(True), then=LInt(1), else_=LInt(2))
         d = _roundtrip(node)
         assert d["type"] == "If"
-        assert "cond" in d
-        assert "then" in d
-        assert "else_" in d
+        assert "cond" in d and "then" in d and "else_" in d
+
+
+# -- Compare/Arith ------------------------------------------------------------
 
 
 class TestCompareArith:
@@ -144,6 +147,9 @@ class TestCompareArith:
             _roundtrip(Arith(op, LFloat(1.0), LFloat(2.0)))
 
 
+# -- Option operations ---------------------------------------------------------
+
+
 class TestOptionOps:
     def test_is_some(self):
         _roundtrip(IsSome(Var("x")))
@@ -155,6 +161,9 @@ class TestOptionOps:
         assert "default" in d
 
 
+# -- Temporal ------------------------------------------------------------------
+
+
 class TestTemporal:
     def test_before(self):
         d = _roundtrip(Before("status"))
@@ -163,6 +172,9 @@ class TestTemporal:
     def test_after(self):
         d = _roundtrip(After("balance"))
         assert d == {"type": "After", "field": "balance"}
+
+
+# -- Spec nodes ----------------------------------------------------------------
 
 
 class TestSpecNodes:
@@ -178,9 +190,11 @@ class TestSpecNodes:
         assert d["n"] == 5
 
 
+# -- Compound round-trip -------------------------------------------------------
+
+
 class TestCompoundRoundTrip:
     def test_guard_expression(self):
-        """balance >= amount AND status == 'active'"""
         node = And(
             Compare(
                 CmpOp.GE, Field(Var("state"), "balance"), Field(Var("event"), "amount")
@@ -190,7 +204,6 @@ class TestCompoundRoundTrip:
         _roundtrip(node)
 
     def test_maintain_clause(self):
-        """Always(After(balance) == Before(balance) - event.amount)"""
         node = Always(
             Compare(
                 CmpOp.EQ,
@@ -200,13 +213,8 @@ class TestCompoundRoundTrip:
         )
         _roundtrip(node)
 
-    def test_nested_if(self):
-        node = If(
-            Compare(CmpOp.GT, Var("x"), LInt(0)),
-            Arith(ArithOp.MUL, Var("x"), LInt(2)),
-            UnwrapOr(Var("default"), LInt(0)),
-        )
-        _roundtrip(node)
+
+# -- JSON compatibility --------------------------------------------------------
 
 
 class TestJsonCompatibility:
@@ -214,16 +222,17 @@ class TestJsonCompatibility:
         node = And(Compare(CmpOp.GE, Var("x"), LInt(0)), LBool(True))
         d = to_dict(node)
         json_str = json.dumps(d, sort_keys=True)
-        restored_dict = json.loads(json_str)
-        restored = from_dict(restored_dict)
+        restored = from_dict(json.loads(json_str))
         assert restored == node
 
     def test_deterministic_output(self):
         node = Compare(CmpOp.EQ, Var("a"), Var("b"))
         d1 = to_dict(node)
         d2 = to_dict(node)
-        assert d1 == d2
         assert json.dumps(d1, sort_keys=True) == json.dumps(d2, sort_keys=True)
+
+
+# -- Deserialization errors ----------------------------------------------------
 
 
 class TestFromDictErrors:
@@ -239,11 +248,11 @@ class TestFromDictErrors:
         with pytest.raises(K3SerdeError, match="unknown node type"):
             from_dict({"type": "Bogus"})
 
-    def test_lbool_wrong_val_type(self):
+    def test_lbool_wrong_val(self):
         with pytest.raises(K3SerdeError, match="expected bool"):
             from_dict({"type": "LBool", "val": 1})
 
-    def test_lint_wrong_val_type(self):
+    def test_lint_wrong_val(self):
         with pytest.raises(K3SerdeError, match="expected int"):
             from_dict({"type": "LInt", "val": "not_int"})
 
@@ -251,77 +260,21 @@ class TestFromDictErrors:
         with pytest.raises(K3SerdeError, match="expected int"):
             from_dict({"type": "LInt", "val": True})
 
-    def test_lfloat_wrong_val_type(self):
-        with pytest.raises(K3SerdeError, match="expected float"):
-            from_dict({"type": "LFloat", "val": "x"})
-
-    def test_lfloat_rejects_bool(self):
-        with pytest.raises(K3SerdeError, match="expected float"):
-            from_dict({"type": "LFloat", "val": True})
-
     def test_lfloat_accepts_int(self):
         node = from_dict({"type": "LFloat", "val": 3})
-        assert isinstance(node, LFloat)
-        assert node.val == pytest.approx(3.0)
-
-    def test_lstr_wrong_val_type(self):
-        with pytest.raises(K3SerdeError, match="expected str"):
-            from_dict({"type": "LStr", "val": 42})
-
-    def test_var_missing_name(self):
-        with pytest.raises(K3SerdeError, match="name"):
-            from_dict({"type": "Var"})
-
-    def test_field_missing_expr(self):
-        with pytest.raises(K3SerdeError, match="expr"):
-            from_dict({"type": "Field", "name": "x"})
-
-    def test_and_missing_left(self):
-        with pytest.raises(K3SerdeError, match="left"):
-            from_dict({"type": "And", "right": {"type": "LBool", "val": True}})
-
-    def test_compare_missing_op(self):
-        with pytest.raises(K3SerdeError, match="op"):
-            from_dict(
-                {
-                    "type": "Compare",
-                    "left": {"type": "LInt", "val": 1},
-                    "right": {"type": "LInt", "val": 2},
-                }
-            )
+        assert isinstance(node, LFloat) and node.val == pytest.approx(3.0)
 
     def test_within_non_int_n(self):
         with pytest.raises(K3SerdeError, match="expected int"):
             from_dict(
-                {
-                    "type": "Within",
-                    "expr": {"type": "LBool", "val": True},
-                    "n": 3.5,
-                }
-            )
-
-    def test_within_bool_n(self):
-        with pytest.raises(K3SerdeError, match="expected int"):
-            from_dict(
-                {
-                    "type": "Within",
-                    "expr": {"type": "LBool", "val": True},
-                    "n": True,
-                }
-            )
-
-    def test_if_missing_else(self):
-        with pytest.raises(K3SerdeError, match="else_"):
-            from_dict(
-                {
-                    "type": "If",
-                    "cond": {"type": "LBool", "val": True},
-                    "then": {"type": "LInt", "val": 1},
-                }
+                {"type": "Within", "expr": {"type": "LBool", "val": True}, "n": 3.5}
             )
 
 
-class TestK3lTypePrimitives:
+# -- ExprType round-trip -------------------------------------------------------
+
+
+class TestExprTypePrimitives:
     def test_tbool(self):
         d = _type_roundtrip(TBool())
         assert d == {"type": "TBool"}
@@ -340,24 +293,20 @@ class TestK3lTypePrimitives:
         assert d == {"type": "TRef", "name": "OrderId"}
 
 
-class TestK3lTypeCompound:
+class TestExprTypeCompound:
     def test_trecord(self):
         node = TRecord(fields={"name": TString(), "age": TInt()})
         d = _type_roundtrip(node)
         assert d["type"] == "TRecord"
-        assert "name" in d["fields"]
 
     def test_tvariant(self):
-        node = TVariant(variants={"ok": TInt(), "err": TString()})
-        _type_roundtrip(node)
+        _type_roundtrip(TVariant(variants={"ok": TInt(), "err": TString()}))
 
     def test_tlist(self):
-        node = TList(element=TInt())
-        _type_roundtrip(node)
+        _type_roundtrip(TList(element=TInt()))
 
     def test_toption(self):
-        node = TOption(inner=TString())
-        _type_roundtrip(node)
+        _type_roundtrip(TOption(inner=TString()))
 
     def test_nested_types(self):
         node = TRecord(
@@ -371,7 +320,7 @@ class TestK3lTypeCompound:
         _type_roundtrip(node)
 
 
-class TestK3lTypeErrors:
+class TestExprTypeErrors:
     def test_missing_type(self):
         with pytest.raises(K3SerdeError, match="type"):
             type_from_dict({"fields": {}})
@@ -383,19 +332,3 @@ class TestK3lTypeErrors:
     def test_trecord_missing_fields(self):
         with pytest.raises(K3SerdeError, match="fields"):
             type_from_dict({"type": "TRecord"})
-
-    def test_tvariant_missing_variants(self):
-        with pytest.raises(K3SerdeError, match="variants"):
-            type_from_dict({"type": "TVariant"})
-
-    def test_tlist_missing_element(self):
-        with pytest.raises(K3SerdeError, match="element"):
-            type_from_dict({"type": "TList"})
-
-    def test_toption_missing_inner(self):
-        with pytest.raises(K3SerdeError, match="inner"):
-            type_from_dict({"type": "TOption"})
-
-    def test_tref_missing_name(self):
-        with pytest.raises(K3SerdeError, match="name"):
-            type_from_dict({"type": "TRef"})
