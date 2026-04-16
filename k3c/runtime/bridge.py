@@ -177,7 +177,17 @@ class BridgedUniverse:
             return self._handle_failure(
                 source_result, target_event, original_event, "target rejected"
             )
-        return source_result
+        # Merge: combined state, source outputs + target outputs
+        return Ok(
+            state=self.state,
+            ctx=source_result.ctx,
+            step_hash=source_result.step_hash,
+            projections={
+                **source_result.projections,
+                **{f"target.{k}": v for k, v in target_result.projections.items()},
+            },
+            outputs=source_result.outputs + target_result.outputs,
+        )
 
     def _handle_failure(self, source_result, target_event, original_event, reason):
         if self._fallback == FallbackStrategy.FAIL:

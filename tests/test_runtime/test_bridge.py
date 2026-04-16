@@ -7,7 +7,8 @@ from k3c.engine.result import Ok
 from k3c.ir.expr import Always, CmpOp, Compare, EventField, Field, LInt, Var
 from k3c.runtime.bridge import BridgeMode, BridgedUniverse, FallbackStrategy
 from k3c.runtime.universe import Universe
-from k3c.spec.model import Maintain, Permit, Spec
+from k3c.ir.expr import LStr, Record
+from k3c.spec.model import Maintain, Output, Permit, Projection, Spec
 
 
 def _counter_spec(name):
@@ -127,3 +128,78 @@ class TestBridgeReduce:
         assert isinstance(r, Ok)
         assert source.state["count"] == 6
         assert target.state["count"] == 6
+
+
+class TestBridgeSyncReturnsTarget:
+    """Synchronous bridge returns target outputs and projections."""
+
+    def _target_spec(self):
+        return Spec(
+            name="target",
+            state0={"count": 0},
+            permits=(
+                Permit(name="valid", when=Compare(CmpOp.GE, EventField("n"), LInt(0))),
+            ),
+            maintains=(
+                Maintain(
+                    name="non_negative",
+                    expr=Always(
+                        Compare(CmpOp.GE, Field(Var("state"), "count"), LInt(0))
+                    ),
+                ),
+            ),
+            projections=(
+                Projection(
+                    name="double", expr=Field(Var("state"), "count")
+                ),
+            ),
+            outputs=(
+                Output(
+                    name="ack",
+                    expr=Record((("status", LStr("ok")),)),
+                ),
+            ),
+        )
+
+    def test_target_outputs_in_result(self):
+        source = Universe(spec=_counter_spec("source"), transition=_counter_transition)
+        target = Universe(spec=self._target_spec(), transition=_counter_transition)
+        bridged = BridgedUniverse(source=source, target=target, mapper=_mapper)
+
+        r = bridged.apply({"n": 5})
+        assert isinstance(r, Ok)
+        # Target output flows back
+        assert any(o.get("status") == "ok" for o in r.outputs)
+
+    def test_target_projections_namespaced(self):
+        source = Universe(spec=_counter_spec("source"), transition=_counter_transition)
+        target = Universe(spec=self._target_spec(), transition=_counter_transition)
+        bridged = BridgedUniverse(source=source, target=target, mapper=_mapper)
+
+        r = bridged.apply({"n": 5})
+        assert isinstance(r, Ok)
+        # Target projections are namespaced with "target."
+        assert "target.double" in r.projections
+
+    def test_combined_state(self):
+        source = Universe(spec=_counter_spec("source"), transition=_counter_transition)
+        target = Universe(spec=self._target_spec(), transition=_counter_transition)
+        bridged = BridgedUniverse(source=source, target=target, mapper=_mapper)
+
+        r = bridged.apply({"n": 5})
+        assert isinstance(r, Ok)
+        assert r.state["source"]["count"] == 5
+        assert r.state["target"]["count"] == 5
+
+    def test_async_still_returns_source_only(self):
+        """Async mode returns source result (target may not be done)."""
+        source = Universe(spec=_counter_spec("source"), transition=_counter_transition)
+        target = Universe(spec=self._target_spec(), transition=_counter_transition)
+        bridged = BridgedUniverse(
+            source=source, target=target, mapper=_mapper, mode=BridgeMode.ASYNC
+        )
+
+        r = bridged.apply({"n": 5})
+        assert isinstance(r, Ok)
+        # Async returns source result — no target outputs
+        assert len(r.outputs) == 0

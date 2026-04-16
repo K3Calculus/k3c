@@ -525,11 +525,23 @@ result = bridged.apply(event)
 
 ### Bridge Modes
 
-| Mode | Consistency | Delivery |
-|------|-------------|----------|
-| Synchronous | Strong | Both succeed or neither |
-| Async | Eventual | Source commits first |
-| BestEffort | Weak | No delivery guarantee |
+| Mode | Consistency | Delivery | Returns |
+|------|-------------|----------|---------|
+| Synchronous | Strong | Both succeed or neither | Combined state + target outputs/projections |
+| Async | Eventual | Source commits first | Source result only |
+| BestEffort | Weak | No delivery guarantee | Source result only |
+
+In synchronous mode, the target's `Ok` result flows back to the caller:
+
+```python
+result = bridged.apply(event)
+result.state                     # {"source": {...}, "target": {...}}
+result.outputs                   # source outputs + target outputs (merged)
+result.projections["target.x"]   # target projections namespaced with "target."
+```
+
+This enables patterns like an error universe whose outputs carry decisions back
+to the source.
 
 ## Isolation
 
