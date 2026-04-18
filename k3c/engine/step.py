@@ -40,13 +40,17 @@ type TransitionFn = Callable[[dict[str, object], dict[str, object]], dict[str, o
 # -- Hash step -----------------------------------------------------------------
 
 
-def _hash_step(
+def compute_step_hash(
     state: dict[str, object],
     event: dict[str, object],
     prev_step_hash: str,
     hash_fn: str = "sha256",
 ) -> str:
-    """Compute the chained step hash."""
+    """Compute the chained step hash.
+
+    Public so attestation verifiers can recompute step hashes from custody
+    inputs instead of trusting the hash recorded in the bundle.
+    """
     if hash_fn == "none":
         return ""
 
@@ -67,6 +71,10 @@ def _hash_step(
         case _:
             msg = f"Unknown hash_fn: {hash_fn!r}"
             raise ValueError(msg)
+
+
+# Internal alias kept for backwards-compat within this module.
+_hash_step = compute_step_hash
 
 
 # -- Build eval context --------------------------------------------------------

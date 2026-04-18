@@ -270,6 +270,32 @@ class EmbeddedUniverse:
             if isinstance(result, Violated):
                 return
 
+    def get(self, field: str, default: object = None) -> object:
+        """Read a single state field without copying the entire dict."""
+        return self._state.get(field, default)
+
+    def simulate(self, events: Iterable[object]):
+        """Samsara — simulate with full trajectory collection (KC-3).
+
+        Returns a RunResult suitable for attestation, replay, and inspection.
+        Same semantics as Universe.simulate().
+        """
+        from k3c.runtime.samsara import simulate as _simulate
+
+        return _simulate(self, events)
+
+    def replay(
+        self,
+        events,
+        *,
+        expected_hashes,
+    ):
+        """Deterministic replay verification (KC-3). See Universe.replay()."""
+        from k3c.runtime.samsara import replay as _replay
+
+        self.reset()
+        return _replay(self, events, expected_hashes=expected_hashes)
+
     def reset(self) -> None:
         """Reset state and ctx to initial."""
         self._state = deepcopy(self._initial_state)

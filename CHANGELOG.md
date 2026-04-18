@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.4.1 (2026-04-18)
+
+### Security
+
+- **`verify_bundle` now performs two-layer verification**: content integrity (recompute step_hash from `prev_step_hash`, `state_before`, `event` and compare) AND authenticity (signature over canonical `(event, state_after, step_hash, result_kind)`). Previous version only checked signature against the recorded step_hash, so an attacker with bundle-write access could swap `event` or `state_after` while signatures still validated.
+- **Tamper modes now caught**: `state_before`, `state_after`, `event`, `step_hash`, `prev_step_hash`, `result_kind`, `signature`, and `initial_state`.
+- **Bundle wire format bumped to v2**: now records `state_before`, `prev_step_hash`, `result_kind`, and `hash_fn` per step. Required to recompute step hashes independently. Old v1 bundles fail verification.
+
+### Features
+
+- **JSON-primitive discipline**: `AttestationBundle.from_run()` now raises `ValueError` with the offending field path if state or event values contain opaque dataclasses or non-JSON primitives. Prevents silent `to_json()` failures and lossy serialization.
+- **`EmbeddedUniverse.simulate()` and `replay()`**: `EmbeddedRuntime` users can now build attestation bundles directly without dropping to a plain `Universe`. Also added `EmbeddedUniverse.get(field)`.
+- **`compute_step_hash()` exposed publicly** in `k3c.engine.step` for verifiers and external integrations.
+
 ## v0.4.0 (2026-04-18)
 
 ### Features (avic-feedback batch)

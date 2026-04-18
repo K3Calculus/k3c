@@ -1,6 +1,6 @@
 # k3c — Kulkarni Calculus Python SDK
 
-> k3c v0.4.0 | Python >=3.12 | MIT License
+> k3c v0.4.1 | Python >=3.12 | MIT License
 > Homepage: https://k3c.dev | Repository: https://github.com/K3Calculus/k3c
 
 ## What k3c Is
@@ -249,6 +249,54 @@ assert result.steps_verified == len(events)
 
 `Signer` is a Protocol — `HmacSigner` (stdlib `hmac`) and `Ed25519Signer` (optional
 `cryptography`) ship with k3c. Custom signers (KMS, HSM, etc.) implement the Protocol.
+
+### Two-layer verification
+
+`verify_bundle()` runs two independent checks per step:
+
+1. **Content integrity**: recompute `step_hash` from the bundle's
+   `(prev_step_hash, state_before, event)` using the bundle's `hash_fn`, and
+   compare against the recorded `step_hash`. Catches tampering with `event` or
+   `state_before` even if the signature is forged.
+
+2. **Authenticity**: verify the signature over canonical
+   `(event, state_after, step_hash, result_kind)`. Catches signature forgery
+   and tampering with `state_after` or `result_kind` (which the chain alone
+   doesn't protect — e.g., the final step's `state_after`).
+
+Tamper modes caught: `state_before`, `state_after`, `event`, `step_hash`,
+`prev_step_hash`, `result_kind`, `signature`, `initial_state`. Each maps to a
+`failure_kind` ("content" or "signature") and identifies the offending step.
+
+### JSON-primitive discipline
+
+State and event values must be JSON primitives (`str`, `int`, `float`, `bool`,
+`None`, or `list`/`dict` thereof). `from_run()` raises `ValueError` with the
+offending field path if any value is opaque (custom dataclass, domain object).
+Convert to dicts before applying events:
+
+```python
+# BAD: opaque dataclass leaks into state — raises at attestation time
+def t(s, e):
+    return {**s, "customer": Customer("alice")}
+
+# GOOD: JSON-safe dict
+def t(s, e):
+    return {**s, "customer": {"name": "alice"}}
+```
+
+### Bundle wire format (v2)
+
+Each `SignedStep` records `state_before`, `state_after`, `prev_step_hash`,
+`step_hash`, `result_kind`, and `signature`. The bundle records `hash_fn` and
+`initial_step_hash`. This data is sufficient for an independent verifier to
+re-derive every step hash from inputs.
+
+### EmbeddedRuntime support
+
+`EmbeddedUniverse.simulate()`, `.replay()`, and `.get(field)` work the same
+as on plain `Universe`, so embedded runtimes can produce attestation bundles
+directly without dropping to the underlying `Universe`.
 
 ## N-way Composition
 
