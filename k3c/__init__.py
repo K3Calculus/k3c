@@ -30,9 +30,11 @@ Usage:
 # -- Spec model (declarative, no builder) --------------------------------------
 from k3c.spec.model import (
     CompareMode,
+    EventDef,
     FieldDef,
     Korrelator,
     Maintain,
+    Migration,
     Output,
     Permit,
     Projection,
@@ -160,7 +162,13 @@ from k3c.ir.types import (
 
 # -- Runtime -------------------------------------------------------------------
 from k3c.runtime.universe import ReduceAllResult, Universe
-from k3c.runtime.compose import Applyable, ComposedUniverse
+from k3c.runtime.compose import (
+    Applyable,
+    ComposedUniverse,
+    ManyUniverse,
+    Pipeline,
+    compose_many,
+)
 from k3c.runtime.embedded import EmbeddedRuntime, EmbeddedUniverse
 from k3c.runtime.isolate import IsolatedUniverse
 from k3c.runtime.parallel import ChunkResult, ChunkSource, ParallelReduceResult, parallel_reduce
@@ -184,6 +192,23 @@ from k3c.ir.serde import to_dict as expr_to_dict
 from k3c.ir.serde import type_from_dict, type_to_dict
 from k3c.spec.serde import spec_from_dict, spec_to_dict
 
+# -- Sugar ---------------------------------------------------------------------
+from k3c.sugar import E, Q, S, SS, all_of, any_of, k3, lit
+
+# -- Protocol DSL --------------------------------------------------------------
+from k3c.protocol import Protocol
+
+# -- Attestation (KC-6) --------------------------------------------------------
+from k3c.attest import (
+    AttestationBundle,
+    Ed25519Signer,
+    HmacSigner,
+    SignedStep,
+    Signer,
+    VerifyResult,
+    verify_bundle,
+)
+
 # -- Emit ----------------------------------------------------------------------
 from k3c.emit import to_python, to_sql, to_typescript
 
@@ -204,9 +229,11 @@ __all__ = [
     # Spec model
     "Spec",
     "FieldDef",
+    "EventDef",
     "Permit",
     "Require",
     "Maintain",
+    "Migration",
     "Validate",
     "Severity",
     "Projection",
@@ -324,6 +351,9 @@ __all__ = [
     "ReduceAllResult",
     "Applyable",
     "ComposedUniverse",
+    "ManyUniverse",
+    "Pipeline",
+    "compose_many",
     "BridgedUniverse",
     "BridgeMode",
     "FallbackStrategy",
@@ -355,6 +385,25 @@ __all__ = [
     "type_from_dict",
     "spec_to_dict",
     "spec_from_dict",
+    # Sugar
+    "S",
+    "E",
+    "SS",
+    "Q",
+    "k3",
+    "lit",
+    "all_of",
+    "any_of",
+    # Protocol
+    "Protocol",
+    # Attestation
+    "Signer",
+    "HmacSigner",
+    "Ed25519Signer",
+    "AttestationBundle",
+    "SignedStep",
+    "VerifyResult",
+    "verify_bundle",
     # Emit
     "to_typescript",
     "to_sql",

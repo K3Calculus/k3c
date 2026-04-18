@@ -38,9 +38,11 @@ from k3c.spec.extract import (
 )
 from k3c.spec.model import (
     CompareMode,
+    EventDef,
     FieldDef,
     Korrelator,
     Maintain,
+    Migration,
     Output,
     Permit,
     Projection,
@@ -215,14 +217,20 @@ def _permit_to_dict(p: Permit) -> dict[str, object]:
     d: dict[str, object] = {"name": p.name, "when": expr_to_dict(p.when)}
     if p.on is not None:
         d["on"] = p.on
+    if p.denied is not None:
+        d["denied"] = expr_to_dict(p.denied)
     return d
 
 
 def _permit_from_dict(data: dict[str, object]) -> Permit:
+    denied_raw = data.get("denied")
     return Permit(
         name=str(data["name"]),
         when=expr_from_dict(cast("dict[str, object]", data["when"])),
         on=data.get("on"),  # type: ignore[arg-type]
+        denied=expr_from_dict(cast("dict[str, object]", denied_raw))
+        if denied_raw is not None
+        else None,
     )
 
 
@@ -242,14 +250,20 @@ def _maintain_to_dict(m: Maintain) -> dict[str, object]:
     d: dict[str, object] = {"name": m.name, "expr": expr_to_dict(m.expr)}
     if m.severity != Severity.ERROR:
         d["severity"] = m.severity.value
+    if m.denied is not None:
+        d["denied"] = expr_to_dict(m.denied)
     return d
 
 
 def _maintain_from_dict(data: dict[str, object]) -> Maintain:
+    denied_raw = data.get("denied")
     return Maintain(
         name=str(data["name"]),
         expr=expr_from_dict(cast("dict[str, object]", data["expr"])),
         severity=Severity(data.get("severity", "error")),
+        denied=expr_from_dict(cast("dict[str, object]", denied_raw))
+        if denied_raw is not None
+        else None,
     )
 
 
@@ -265,10 +279,13 @@ def _validate_to_dict(v: Validate) -> dict[str, object]:
         d["field"] = v.field
     if v.constraint is not None:
         d["constraint"] = v.constraint
+    if v.denied is not None:
+        d["denied"] = expr_to_dict(v.denied)
     return d
 
 
 def _validate_from_dict(data: dict[str, object]) -> Validate:
+    denied_raw = data.get("denied")
     return Validate(
         name=str(data["name"]),
         on=str(data["on"]),
@@ -276,6 +293,9 @@ def _validate_from_dict(data: dict[str, object]) -> Validate:
         severity=Severity(data.get("severity", "error")),
         field=data.get("field"),  # type: ignore[arg-type]
         constraint=data.get("constraint"),  # type: ignore[arg-type]
+        denied=expr_from_dict(cast("dict[str, object]", denied_raw))
+        if denied_raw is not None
+        else None,
     )
 
 
@@ -306,6 +326,22 @@ def _output_from_dict(data: dict[str, object]) -> Output:
         name=str(data["name"]),
         expr=expr_from_dict(cast("dict[str, object]", data["expr"])),
         on=data.get("on"),  # type: ignore[arg-type]
+    )
+
+
+def _migration_to_dict(m: Migration) -> dict[str, object]:
+    return {
+        "from_version": m.from_version,
+        "to_version": m.to_version,
+        "transform": expr_to_dict(m.transform),
+    }
+
+
+def _migration_from_dict(data: dict[str, object]) -> Migration:
+    return Migration(
+        from_version=int(data["from_version"]),  # type: ignore[arg-type]
+        to_version=int(data["to_version"]),  # type: ignore[arg-type]
+        transform=expr_from_dict(cast("dict[str, object]", data["transform"])),
     )
 
 
@@ -349,6 +385,24 @@ def _field_def_from_dict(data: dict[str, object]) -> FieldDef:
     )
 
 
+def _event_def_to_dict(e: EventDef) -> dict[str, object]:
+    d: dict[str, object] = {"name": e.name}
+    if e.fields:
+        d["fields"] = [_field_def_to_dict(f) for f in e.fields]
+    if e.description:
+        d["description"] = e.description
+    return d
+
+
+def _event_def_from_dict(data: dict[str, object]) -> EventDef:
+    fields_raw = cast("list[dict[str, object]]", data.get("fields", []))
+    return EventDef(
+        name=str(data["name"]),
+        fields=tuple(_field_def_from_dict(f) for f in fields_raw),
+        description=str(data.get("description", "")),
+    )
+
+
 # -- Spec serde ----------------------------------------------------------------
 
 
@@ -365,6 +419,9 @@ def spec_to_dict(spec: Spec) -> dict[str, object]:
 
     if spec.fields:
         d["fields"] = [_field_def_to_dict(f) for f in spec.fields]
+
+    if spec.events:
+        d["events"] = [_event_def_to_dict(e) for e in spec.events]
 
     if spec.decode is not None:
         d["decode"] = decode_to_dict(spec.decode)
@@ -390,6 +447,12 @@ def spec_to_dict(spec: Spec) -> dict[str, object]:
     if spec.korrelator is not None:
         d["korrelator"] = _korrelator_to_dict(spec.korrelator)
 
+    if spec.version != 1:
+        d["version"] = spec.version
+
+    if spec.migrations:
+        d["migrations"] = [_migration_to_dict(m) for m in spec.migrations]
+
     if spec.protocol_start != "__start__":
         d["protocol_start"] = spec.protocol_start
 
@@ -403,6 +466,8 @@ def spec_from_dict(data: dict[str, object]) -> Spec:
     Validate, Severity, decode plans, and extractors.
     """
     fields_raw = cast("list[dict[str, object]]", data.get("fields", []))
+    events_raw = cast("list[dict[str, object]]", data.get("events", []))
+    migrations_raw = cast("list[dict[str, object]]", data.get("migrations", []))
     permits_raw = cast("list[dict[str, object]]", data.get("permits", []))
     requires_raw = cast("list[dict[str, object]]", data.get("requires", []))
     maintains_raw = cast("list[dict[str, object]]", data.get("maintains", []))
@@ -416,6 +481,7 @@ def spec_from_dict(data: dict[str, object]) -> Spec:
         name=str(data["name"]),
         state0=cast("dict[str, object]", data["state0"]),
         fields=tuple(_field_def_from_dict(f) for f in fields_raw),
+        events=tuple(_event_def_from_dict(e) for e in events_raw),
         decode=decode_from_dict(cast("dict[str, object]", decode_raw))
         if decode_raw is not None
         else None,
@@ -428,5 +494,7 @@ def spec_from_dict(data: dict[str, object]) -> Spec:
         korrelator=_korrelator_from_dict(cast("dict[str, object]", korr_raw))
         if korr_raw is not None
         else None,
+        version=int(data.get("version", 1)),  # type: ignore[arg-type]
+        migrations=tuple(_migration_from_dict(m) for m in migrations_raw),
         protocol_start=str(data.get("protocol_start", "__start__")),
     )

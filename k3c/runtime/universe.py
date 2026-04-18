@@ -68,6 +68,51 @@ class ReduceAllResult:
 # -- Well-formedness validation ------------------------------------------------
 
 
+def _apply_migrations(
+    state: dict[str, object], compiled: CompiledSpec
+) -> dict[str, object]:
+    """Apply schema migrations to bring state up to compiled.version.
+
+    State carries its schema version in __schema_version__. If absent, assumed
+    to match the spec version (no migration needed).
+    """
+    if not compiled.migrations:
+        return state
+
+    current_version = state.get("__schema_version__", compiled.version)
+    if not isinstance(current_version, int):
+        return state
+    if current_version >= compiled.version:
+        # Stamp the version even if no migration ran
+        if "__schema_version__" not in state:
+            state["__schema_version__"] = compiled.version
+        return state
+
+    migrated = state
+    while current_version < compiled.version:
+        # Find a migration starting at current_version
+        migration = next(
+            (m for m in compiled.migrations if m.from_version == current_version),
+            None,
+        )
+        if migration is None:
+            msg = (
+                f"No migration path from version {current_version} to {compiled.version}"
+            )
+            raise ValueError(msg)
+        eval_ctx: dict[str, object] = {"state": migrated, "event": {}}
+        result = k3_eval(migration.transform, eval_ctx, "")
+        if isinstance(result, Some) and isinstance(result.val, dict):
+            migrated = cast("dict[str, object]", result.val)
+        else:
+            msg = f"Migration {current_version}->{migration.to_version} did not produce a dict"
+            raise ValueError(msg)
+        current_version = migration.to_version
+
+    migrated["__schema_version__"] = compiled.version
+    return migrated
+
+
 def _validate_well_formed(compiled: CompiledSpec) -> None:
     """Check well-formedness rules at construction time."""
     if not compiled.state0:
@@ -131,7 +176,9 @@ class Universe:
             _validate_well_formed(self._compiled)
 
         self._id = id or self._compiled.name
-        self._state = deepcopy(state or self._compiled.state0)
+        raw_state = deepcopy(state or self._compiled.state0)
+        # Apply schema migrations if state is from an older version
+        self._state = _apply_migrations(raw_state, self._compiled)
         self._ctx = ctx or SpecCtx.initial(self._compiled.state0)
         self._transition = transition
         self._initial_state = deepcopy(self._state)

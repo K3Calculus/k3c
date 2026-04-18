@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.4.0 (2026-04-18)
+
+### Features (avic-feedback batch)
+
+- **IR sugar** (`S`, `E`, `SS`, `k3()`): operator-overloaded expression building. `S.balance >= E.amount` instead of `Compare(CmpOp.GE, Field(Var("state"), "balance"), EventField("amount"))`. Includes `&`, `|`, `~`, `.in_()`, `all_of()`, `any_of()`, arithmetic.
+- **`EventDef`**: declared event structure with typed fields. Round-trips through serde.
+- **`Protocol` DSL**: linear FSM constructor. `Protocol(states, transitions)` auto-generates `event_defs()`, `permits()`, `maintains()`, and a `transition_table()`.
+- **`denied=` IR Expression**: rich rejection messages on `Permit`, `Maintain`, `Validate`. Evaluates to a string with state/event context.
+- **Keyed attestation (KC-6)**: `HmacSigner`, `Ed25519Signer`, `AttestationBundle.from_run()`, `verify_bundle()`. Round-trips to JSON.
+- **`compose_many()` and `Pipeline`**: N-way composition. `compose_many` routes by name to one universe; `Pipeline` applies events to every stage in order.
+- **Schema migrations**: `Spec(version=N, migrations=(Migration(from_version, to_version, transform),))`. Old state automatically migrated on Universe construction. State carries `__schema_version__`.
+- **Sub-expression diagnostics**: failed Maintain clauses now include a diagnosis tree in `Why.messages` showing which sub-clause evaluated to what.
+
 ## v0.3.2 (2026-04-16)
 
 ### Features

@@ -47,17 +47,49 @@ class FieldDef:
 
 
 @dataclass(frozen=True)
+class EventDef:
+    """An event type schema -- declares what an event of a given type carries.
+
+    name: the event type identifier (matches event["type"] at runtime)
+    fields: typed fields the event carries (excluding "type" itself)
+    description: human-readable purpose of the event
+
+    Use to give events a declared structure. Permit/Validate `on=` parameters
+    refer to EventDef.name. Enables future schema validation, IDE autocomplete,
+    and code emission.
+
+    Example:
+        EventDef(
+            name="Withdraw",
+            fields=(
+                FieldDef(name="amount", type=TInt()),
+                FieldDef(name="currency", type=TString()),
+            ),
+            description="Withdraw funds from account",
+        )
+    """
+
+    name: str
+    fields: tuple[FieldDef, ...] = ()
+    description: str = ""
+
+
+@dataclass(frozen=True)
 class Permit:
     """A guard clause -- evaluated by G.
 
     name: human-readable identifier
     when: Expr that must evaluate to Some(True) for the event to be permitted
     on: optional event type filter
+    denied: optional Expr (evaluated when guard fails) producing a rich message.
+            Should evaluate to a string. If None, generic "Permit X denied" is used.
+            Has access to state, event, and spec_state.
     """
 
     name: str
     when: Expr
     on: str | None = None
+    denied: Expr | None = None
 
 
 @dataclass(frozen=True)
@@ -89,6 +121,8 @@ class Maintain:
     expr: Always(phi) -> N, Always(Within(phi,n)) -> Ctx+N,
           Always(Eventually(phi)) -> L
     severity: "error" (default, produces Violated) or "warning" (produces Warning)
+    denied: optional Expr (evaluated when invariant fails) producing a rich message.
+            Should evaluate to a string. If None, generic "Maintain X violated" is used.
 
     Routing is done by compile.py, not here.
     """
@@ -96,6 +130,7 @@ class Maintain:
     name: str
     expr: Expr
     severity: Severity = Severity.ERROR
+    denied: Expr | None = None
 
 
 @dataclass(frozen=True)
@@ -139,6 +174,7 @@ class Validate:
     severity: "error" (produces Violated) or "warning" (produces Warning)
     field: optional field name for structured error detail
     constraint: optional constraint description for structured error detail
+    denied: optional Expr (evaluated when check fails) producing a rich message.
     """
 
     name: str
@@ -147,6 +183,7 @@ class Validate:
     severity: Severity = Severity.ERROR
     field: str | None = None
     constraint: str | None = None
+    denied: Expr | None = None
 
 
 class CompareMode(StrEnum):
@@ -154,6 +191,29 @@ class CompareMode(StrEnum):
 
     EXACT = "exact"
     SUBSET = "subset"
+
+
+@dataclass(frozen=True)
+class Migration:
+    """Schema migration — transforms state from one schema version to another.
+
+    from_version: source schema version (must match state's __schema_version__ or be applied in chain)
+    to_version: target schema version
+    transform: IR Expr that produces the new state from the old.
+               Has access to state (the old state).
+               Should produce a Record/With expression.
+
+    Example:
+        Migration(
+            from_version=1,
+            to_version=2,
+            transform=With(Var("state"), (("currency", LStr("USD")),)),
+        )
+    """
+
+    from_version: int
+    to_version: int
+    transform: Expr
 
 
 @dataclass(frozen=True)
@@ -193,6 +253,7 @@ class Spec:
     # I -- Initial
     state0: dict[str, object]
     fields: tuple[FieldDef, ...] = ()
+    events: tuple[EventDef, ...] = ()
     decode: DecodePlan | None = None
 
     # U -- Unfolding
@@ -209,6 +270,10 @@ class Spec:
 
     # K -- Korrelator (declarative)
     korrelator: Korrelator | None = None
+
+    # Schema versioning + migrations
+    version: int = 1
+    migrations: tuple[Migration, ...] = ()
 
     # Protocol
     protocol_start: str = "__start__"
@@ -265,6 +330,7 @@ class Spec:
             name=self.name,
             state0=from_state,
             fields=self.fields,
+            events=self.events,
             decode=self.decode,
             permits=active_permits,
             requires=self.requires,
@@ -273,6 +339,8 @@ class Spec:
             projections=self.projections,
             outputs=self.outputs,
             korrelator=self.korrelator,
+            version=self.version,
+            migrations=self.migrations,
             protocol_start=str(from_state["phase"])
             if isinstance(from_state.get("phase"), str)
             else self.protocol_start,

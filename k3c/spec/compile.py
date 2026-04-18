@@ -20,6 +20,7 @@ from k3c.spec.extract import DecodePlan
 from k3c.spec.model import (
     Korrelator,
     Maintain,
+    Migration,
     Output,
     Permit,
     Projection,
@@ -51,6 +52,7 @@ class ClassifiedMaintain:
     original: Expr
     n: int | None = None
     severity: Severity = Severity.ERROR
+    denied: Expr | None = None
 
 
 def _find_temporal(expr: Expr) -> Within | Eventually | Until | None:
@@ -82,6 +84,7 @@ def classify_maintain(clause: Maintain) -> ClassifiedMaintain:
             expr=inner,
             original=clause.expr,
             severity=clause.severity,
+            denied=clause.denied,
         )
 
     if isinstance(temporal, Within):
@@ -92,6 +95,7 @@ def classify_maintain(clause: Maintain) -> ClassifiedMaintain:
             original=clause.expr,
             n=temporal.n,
             severity=clause.severity,
+            denied=clause.denied,
         )
 
     if isinstance(temporal, Eventually):
@@ -101,6 +105,7 @@ def classify_maintain(clause: Maintain) -> ClassifiedMaintain:
             expr=temporal.expr,
             original=clause.expr,
             severity=clause.severity,
+            denied=clause.denied,
         )
 
     # Until
@@ -154,6 +159,12 @@ class CompiledSpec:
     # K -- Korrelator (declarative)
     korrelator: Korrelator | None
 
+    # Schema versioning
+    version: int
+
+    # Migrations (sorted by from_version)
+    migrations: tuple[Migration, ...]
+
     # Protocol
     protocol_start: str
 
@@ -198,6 +209,8 @@ def compile_spec(spec: Spec, *, hash_fn: str = "sha256") -> CompiledSpec:
         projections=spec.projections,
         outputs=spec.outputs,
         korrelator=spec.korrelator,
+        version=spec.version,
+        migrations=tuple(sorted(spec.migrations, key=lambda m: m.from_version)),
         protocol_start=spec.protocol_start,
         hash_fn=hash_fn,
     )

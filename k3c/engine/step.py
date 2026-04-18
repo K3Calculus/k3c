@@ -26,6 +26,7 @@ from typing import Callable, cast
 from k3c.cache import invariant_cache_key
 from k3c.engine.ctx import SpecCtx
 from k3c.engine.result import Impossible, Ok, StepResult, Violated, Warning, Why, WhyKind
+from k3c.ir.diagnose import diagnose, format_diagnosis
 from k3c.ir.eval import k3_eval
 from k3c.ir.value import Nothing, Some
 from k3c.json import dumps as _json_dumps
@@ -93,6 +94,21 @@ def _build_eval_ctx(
 # -- G check: guards ----------------------------------------------------------
 
 
+def _eval_denied_msg(
+    denied_expr: object,
+    eval_ctx: dict[str, object],
+    step_hash: str,
+    fallback: str,
+) -> str:
+    """Evaluate a denied= expression to a string. Returns fallback if absent or fails."""
+    if denied_expr is None:
+        return fallback
+    result = k3_eval(denied_expr, eval_ctx, step_hash)  # type: ignore[arg-type]
+    if isinstance(result, Some):
+        return str(result.val)
+    return fallback
+
+
 def _check_guards(
     compiled: CompiledSpec,
     eval_ctx: dict[str, object],
@@ -110,12 +126,16 @@ def _check_guards(
         result = k3_eval(permit.when, eval_ctx, step_hash)
 
         if isinstance(result, Nothing):
+            msg = _eval_denied_msg(
+                permit.denied,
+                eval_ctx,
+                step_hash,
+                f"Field {result.field!r} absent \u2014 required by {permit.name!r}",
+            )
             return Why(
                 rule=permit.name,
                 kind=WhyKind.MISSING,
-                messages=(
-                    f"Field {result.field!r} absent \u2014 required by {permit.name!r}",
-                ),
+                messages=(msg,),
                 before=cast("dict[str, object]", eval_ctx.get("state", {})),
                 after=None,
                 event=event,
@@ -126,10 +146,16 @@ def _check_guards(
             )
 
         if isinstance(result, Some) and result.val is False:
+            msg = _eval_denied_msg(
+                permit.denied,
+                eval_ctx,
+                step_hash,
+                f"Permit {permit.name!r} denied",
+            )
             return Why(
                 rule=permit.name,
                 kind=WhyKind.PERMIT,
-                messages=(f"Permit {permit.name!r} denied",),
+                messages=(msg,),
                 before=cast("dict[str, object]", eval_ctx.get("state", {})),
                 after=None,
                 event=event,
@@ -163,12 +189,21 @@ def _check_safety(
 
     for clause in compiled.safety:
         result = k3_eval(clause.expr, eval_ctx, step_hash)
+        denied_expr = getattr(clause, "denied", None) or getattr(
+            clause, "_denied", None
+        )
 
         if isinstance(result, Nothing):
+            msg = _eval_denied_msg(
+                denied_expr,
+                eval_ctx,
+                step_hash,
+                f"Maintain {clause.name!r}: field {result.field!r} absent",
+            )
             return Why(
                 rule=clause.name,
                 kind=WhyKind.MAINTAIN,
-                messages=(f"Maintain {clause.name!r}: field {result.field!r} absent",),
+                messages=(msg,),
                 before=state,
                 after=new_state,
                 event=event,
@@ -179,10 +214,19 @@ def _check_safety(
             ), clause.severity
 
         if isinstance(result, Some) and result.val is False:
+            msg = _eval_denied_msg(
+                denied_expr,
+                eval_ctx,
+                step_hash,
+                f"Maintain {clause.name!r} violated",
+            )
+            # Sub-expression diagnosis for compound clauses
+            diag = diagnose(clause.expr, eval_ctx, step_hash)
+            messages = (msg, "diagnosis:\n" + format_diagnosis(diag))
             return Why(
                 rule=clause.name,
                 kind=WhyKind.MAINTAIN,
-                messages=(f"Maintain {clause.name!r} violated",),
+                messages=messages,
                 before=state,
                 after=new_state,
                 event=event,
@@ -454,7 +498,13 @@ def _check_validates(
         result = k3_eval(clause.check, eval_ctx, step_hash)
 
         if isinstance(result, Nothing):
-            msgs = [f"Validate {clause.name!r}: field {result.field!r} absent"]
+            primary = _eval_denied_msg(
+                clause.denied,
+                eval_ctx,
+                step_hash,
+                f"Validate {clause.name!r}: field {result.field!r} absent",
+            )
+            msgs = [primary]
             if clause.field:
                 msgs.append(f"field: {clause.field}")
             if clause.constraint:
@@ -473,7 +523,13 @@ def _check_validates(
             ), clause.severity
 
         if isinstance(result, Some) and result.val is False:
-            msgs = [f"Validate {clause.name!r} failed"]
+            primary = _eval_denied_msg(
+                clause.denied,
+                eval_ctx,
+                step_hash,
+                f"Validate {clause.name!r} failed",
+            )
+            msgs = [primary]
             if clause.field:
                 msgs.append(f"field: {clause.field}")
             if clause.constraint:

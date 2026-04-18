@@ -1,6 +1,6 @@
 # k3c — Kulkarni Calculus Python SDK
 
-> k3c v0.3.2 | Python >=3.12 | MIT License
+> k3c v0.4.0 | Python >=3.12 | MIT License
 > Homepage: https://k3c.dev | Repository: https://github.com/K3Calculus/k3c
 
 ## What k3c Is
@@ -119,6 +119,228 @@ match u.apply({"type": "Withdraw", "amount": 200}):
     case Ok(state=s):       print(s["balance"])
     case Impossible(why=w): print(w.rule)            # "has_funds"
 ```
+
+## Sugar — Operator-Overloaded Expressions
+
+Building IR by hand is verbose. The sugar layer (`S`, `E`, `SS`, `k3()`) lets you write
+guards and invariants in idiomatic Python:
+
+```python
+from k3c import S, E, k3, all_of, any_of, Permit, Maintain, Always
+
+# State.balance >= Event.amount  (via operator overloads)
+Permit(name="has_funds", on="Withdraw", when=k3(S.balance >= E.amount))
+
+# Logical combinators: & for And, | for Or, ~ for Not
+Permit(name="active_owner", when=k3((S.role == "owner") & (S.status == "active")))
+Permit(name="any_admin",   when=k3((S.role == "admin") | (S.is_root)))
+
+# Membership
+Permit(name="valid_phase", when=k3(S.phase.in_("idle", "active", "done")))
+
+# Variadic
+Maintain(name="all_pos", expr=Always(k3(all_of(S.a > 0, S.b > 0, S.c > 0))))
+
+# Arithmetic
+Permit(name="solvent", when=k3((S.assets - S.liabilities) > 0))
+```
+
+| Sugar | Builds |
+|-------|--------|
+| `S.field` or `S("field")` | `Field(Var("state"), "field")` |
+| `E.field` or `E("field")` | `EventField("field")` |
+| `SS.field` or `SS("field")` | `Field(Var("spec_state"), "field")` |
+| `S.x >= 0` | `Compare(CmpOp.GE, Field(Var("state"), "x"), LInt(0))` |
+| `S.a & S.b` | `And(...)` — use `&` not `and` |
+| `S.a \| S.b` | `Or(...)` — use `\|` not `or` |
+| `~S.locked` | `Not(...)` |
+| `S.x.in_("a", "b")` | `In(...)` |
+| `all_of(e1, e2, e3)` | `AllOf(exprs=(...))` |
+| `any_of(e1, e2, e3)` | `AnyOf(exprs=(...))` |
+| `k3(expr_or_value)` | unwrap Q to plain IR (use at boundary) |
+
+**Pitfall:** `S.x and S.y` raises — Python's `and`/`or` would short-circuit on the wrapper,
+not build IR. Always use `&`, `|`, `~`. The `__bool__` raises with a helpful message if you forget.
+
+## Protocol DSL — Linear State Machines
+
+Linear FSMs are 60%+ of real specs. The Protocol DSL captures the pattern in one place:
+
+```python
+from k3c import Protocol, Spec, Universe
+
+proto = Protocol(
+    name="order",
+    state_field="status",
+    states=("received", "classifying", "extracting", "committed"),
+    transitions=(
+        ("received", "CLASSIFY", "classifying"),
+        ("classifying", "EXTRACT", "extracting"),
+        ("extracting", "COMMIT", "committed"),
+    ),
+)
+
+# Plug auto-generated artifacts into Spec
+spec = Spec(
+    name="order_proc",
+    state0={"status": "received"},
+    events=proto.event_defs(),    # auto: EventDef per event type
+    permits=proto.permits(),      # auto: state-ordering Permit per transition
+    maintains=proto.maintains(),  # auto: status must be one of declared states
+)
+
+# Use the transition table for the user transition function
+table = proto.transition_table()
+def transition(state, event):
+    new = table.get((state["status"], event["type"]))
+    return {**state, "status": new} if new else state
+```
+
+## Rich Denial Messages — `denied=` IR Expression
+
+Default rejection messages are generic ("Permit X denied"). For real apps, set `denied=`
+to an IR expression that evaluates to a string with state and event context:
+
+```python
+from k3c import Permit, Concat, LStr, Field, Var
+
+Permit(
+    name="can_classify", on="CLASSIFY",
+    when=k3(S.stage == "RECEIVED"),
+    denied=Concat(
+        Concat(LStr("Cannot classify: stage is "), Field(Var("state"), "stage")),
+        LStr(", expected RECEIVED"),
+    ),
+)
+# why.message -> "Cannot classify: stage is COMMITTED, expected RECEIVED"
+```
+
+`denied=` is supported on `Permit`, `Maintain`, and `Validate`. The expression has
+access to state, event, and spec_state.
+
+## Keyed Attestation (KC-6)
+
+A plain hash chain proves internal consistency. Keyed attestation proves *who*
+signed it. KC-6 (regulatory-grade audit) requires this.
+
+```python
+from k3c import HmacSigner, Ed25519Signer, AttestationBundle, verify_bundle
+
+# Sign with HMAC-SHA256 (stdlib, no extra deps)
+signer = HmacSigner(key=b"secret-key-bytes", key_id="prod-2026")
+
+# Or Ed25519 (requires: pip install cryptography)
+# signer = Ed25519Signer(key=private_key_bytes, key_id="prod-2026")
+
+# Run a simulation, build a bundle from the trace
+u = Universe(spec=spec, transition=fn)
+run = u.simulate(events)
+bundle = AttestationBundle.from_run(run, signer=signer)
+
+# Serialize for storage/wire
+json_str = bundle.to_json()
+
+# Later — verify
+restored = AttestationBundle.from_dict(json.loads(json_str))
+result = verify_bundle(restored, verifier=signer)
+assert result.valid
+assert result.steps_verified == len(events)
+```
+
+`Signer` is a Protocol — `HmacSigner` (stdlib `hmac`) and `Ed25519Signer` (optional
+`cryptography`) ship with k3c. Custom signers (KMS, HSM, etc.) implement the Protocol.
+
+## N-way Composition
+
+`compose_many()` routes events to one of N named universes. `Pipeline` applies events
+to every stage in order.
+
+```python
+from k3c import compose_many, Pipeline
+
+# Route by name — event goes to ONE universe
+commerce = compose_many(
+    {"orders": order_u, "payments": payment_u, "audit": audit_u},
+    router=lambda e: "audit" if e["type"].startswith("Audit") else "orders",
+)
+
+# Pipeline — event goes to EVERY stage in sequence
+pipe = Pipeline([analyzer, memory, service_graph, correlator])
+result = pipe.apply(event)  # short-circuits on first non-Ok
+```
+
+## Schema Migrations
+
+Specs accumulate fields over time. Declare migrations to upgrade old state:
+
+```python
+from k3c import Migration, Spec
+from k3c import Var, With, LStr
+
+spec = Spec(
+    name="bank",
+    state0={"balance": 100, "currency": "USD"},
+    version=2,                                # current schema version
+    migrations=(
+        Migration(
+            from_version=1, to_version=2,
+            transform=With(Var("state"), (("currency", LStr("USD")),)),
+        ),
+    ),
+)
+
+# Old v1 state (no currency field) gets migrated automatically
+old_state = {"balance": 200, "__schema_version__": 1}
+u = Universe(spec=spec, transition=fn, state=old_state)
+# u.state -> {"balance": 200, "currency": "USD", "__schema_version__": 2}
+```
+
+State carries `__schema_version__`. On Universe construction, migrations are applied
+in chain (1→2→3) until state matches `spec.version`.
+
+## Sub-Expression Diagnostics
+
+When `Always(Implies(And(A, B), C))` fails, `Why.messages` includes a tree showing
+which sub-clause evaluated to what:
+
+```
+Maintain 'complex_invariant' violated
+diagnosis:
+(((state.a Gt 0) AND (state.b Gt 0)) => (state.c Gt 200)) => False
+  ((state.a Gt 0) AND (state.b Gt 0)) => True
+    (state.a Gt 0) => True
+      state.a => 5
+      0 => 0
+    (state.b Gt 0) => True
+      state.b => 10
+      0 => 0
+  (state.c Gt 200) => False
+    state.c => 50
+    200 => 200
+```
+
+This makes debugging compound invariants tractable.
+
+## EventDef — Declared Event Structure
+
+Give events a typed schema:
+
+```python
+from k3c import EventDef, FieldDef
+from k3c.ir.types import TInt, TString
+
+events = (
+    EventDef(name="Withdraw", fields=(
+        FieldDef(name="amount", type=TInt()),
+        FieldDef(name="currency", type=TString()),
+    ), description="Withdraw funds from account"),
+)
+
+spec = Spec(name="bank", state0={"balance": 0}, events=events, ...)
+```
+
+EventDefs document the wire format, enable IDE autocomplete in tooling, and let
+generators emit type-safe stubs.
 
 ## Spec Model
 
