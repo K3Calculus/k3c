@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.4.2 (2026-04-18)
+
+### Features
+
+- **EventDef now enforced at runtime**: when `events=(...)` is declared on a Spec, the engine validates every event between decode and guards. Unknown event types, missing required fields, and wrong field types all produce `Impossible` with rule=`event_schema`. Backwards compatible — when `events` is empty, no enforcement.
+- **`Str` IR node** for explicit string coercion in expressions.
+- **`LNull` IR literal** for representing `None` in specs (`S.voted_for == None` now works).
+- **`before()` / `after()` sugar helpers** for Before/After in temporal invariants.
+- **`Concat` auto-coerces non-string operands** so `denied=Concat(LStr("balance="), Field(...))` works without explicit `Str()` wrapping.
+- **`compute_step_hash()` exposed publicly** for external attestation verifiers.
+- **All 15 examples rewritten** using sugar (S/E/k3), Protocol DSL, denied=, Validate, EventDef, Severity, etc. New examples for attestation, migration, fuzz/explain, and serde.
+- **LLMs.txt rewritten** with current API, EventDef enforcement section, full sugar reference.
+
+### Bug fixes
+
+- **`BridgedUniverse` mapper now receives correct `(state_before, event, state_after)`**. Previously it received `state_after` for both before/after, breaking diff-based bridges.
+
 ## v0.4.1 (2026-04-18)
 
 ### Security

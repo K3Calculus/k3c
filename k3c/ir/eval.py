@@ -49,6 +49,7 @@ from k3c.ir.expr import (
     LFloat,
     LInt,
     LList,
+    LNull,
     LStr,
     Map,
     Matches,
@@ -61,6 +62,7 @@ from k3c.ir.expr import (
     Or,
     Record,
     Slice,
+    Str,
     Trim,
     Until,
     UnwrapOr,
@@ -428,9 +430,8 @@ def _eval_concat(le: Expr, re: Expr, ctx: dict[str, object], sh: str) -> _Res:
     rv = k3_eval(re, ctx, sh)
     if isinstance(rv, Nothing):
         return rv
-    if isinstance(lv.val, str) and isinstance(rv.val, str):
-        return Some(lv.val + rv.val)
-    return _nothing("expected-string", sh)
+    # Auto-coerce non-string operands so denied=Concat(LStr, Field) "just works"
+    return Some(str(lv.val) + str(rv.val))
 
 
 def _eval_trim(expr: Expr, ctx: dict[str, object], sh: str) -> _Res:
@@ -527,6 +528,8 @@ def k3_eval(
     step_hash is threaded into every Nothing for audit trail continuity.
     """
     match expr:
+        case LNull():
+            return Some(None)
         case LBool(val=v) | LInt(val=v) | LFloat(val=v) | LStr(val=v):
             return Some(v)
         case Var(name=name):
@@ -607,6 +610,9 @@ def k3_eval(
             return _eval_concat(le, re, ctx, step_hash)
         case Trim(expr=e):
             return _eval_trim(e, ctx, step_hash)
+        case Str(expr=e):
+            r = k3_eval(e, ctx, step_hash)
+            return r if isinstance(r, Nothing) else Some(str(r.val))
         case Slice(expr=e, start=s, end=en):
             return _eval_slice(e, s, en, ctx, step_hash)
         case Matches(expr=e, pattern=pat):

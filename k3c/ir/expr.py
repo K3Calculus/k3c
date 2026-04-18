@@ -67,6 +67,11 @@ class LStr:
     val: str
 
 
+@dataclass(frozen=True)
+class LNull:
+    """Null literal — represents Python None."""
+
+
 # -- Variables and field access ------------------------------------------------
 
 
@@ -330,6 +335,13 @@ class Trim:
 
 
 @dataclass(frozen=True)
+class Str:
+    """Coerce any value to a string. Useful for denied= messages."""
+
+    expr: Expr
+
+
+@dataclass(frozen=True)
 class Slice:
     """Substring/list slice: expr[start:end]."""
 
@@ -467,6 +479,7 @@ type Expr = (
     | LInt
     | LFloat
     | LStr
+    | LNull
     | LList
     # Variables and access
     | Var
@@ -506,6 +519,7 @@ type Expr = (
     # String operations
     | Concat
     | Trim
+    | Str
     | Slice
     | Matches
     # Record construction

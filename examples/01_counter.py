@@ -1,79 +1,87 @@
+"""01 — Counter
+
+The simplest possible Universe: a counter that can only go up.
+
+Demonstrates:
+- Spec, EventDef (typed events), Permit, Maintain, Universe
+- IR sugar: S, E, k3, operator overloads
+- Four result types: Ok, Warning, Impossible, Violated
+- u.get(field) for cheap reads
+- u.simulate() for trajectory collection
+- Engine enforces declared event types and field shapes
 """
-Example 01: Counter -- The simplest possible K3 system.
 
-A counter that increments. One state field, one event type, one invariant.
-Demonstrates: Spec (dataclass), Universe (constructor), apply, Ok, maintain.
-"""
+from __future__ import annotations
 
-from k3c.engine.result import Impossible, Ok, Violated
-from k3c.ir.expr import Always, CmpOp, Compare, Field, LBool, LInt, Var
-from k3c.runtime.universe import Universe
-from k3c.spec.model import Maintain, Permit, Spec
+from k3c import (
+    Always,
+    EventDef,
+    FieldDef,
+    Impossible,
+    Maintain,
+    Ok,
+    Permit,
+    S,
+    Spec,
+    Universe,
+    Violated,
+    k3,
+)
+from k3c.ir.types import TInt
 
-# -- Spec (declarative, no builder) -------------------------------------------
 
+# 1. Define the spec — including typed events
 spec = Spec(
     name="counter",
     state0={"count": 0},
-    permits=(Permit(name="always_ok", when=LBool(True), on="Inc"),),
+    # Declared events: only Inc with an int n.
+    # Engine enforces — unknown event types and bad field shapes -> Impossible.
+    events=(
+        EventDef(name="Inc", fields=(FieldDef(name="n", type=TInt()),)),
+    ),
+    permits=(
+        Permit(name="positive_inc", on="Inc", when=k3(S.count >= 0)),
+    ),
     maintains=(
-        Maintain(
-            name="non_negative",
-            expr=Always(Compare(CmpOp.GE, Field(Var("state"), "count"), LInt(0))),
-        ),
+        Maintain(name="non_negative", expr=Always(k3(S.count >= 0))),
     ),
 )
 
 
-# -- Transition function (plain function, no System class) ---------------------
+# 2. Pure transition function
+def transition(state: dict, event: dict) -> dict:
+    if event.get("type") == "Inc":
+        return {**state, "count": state["count"] + event.get("n", 1)}
+    return state
 
 
-def counter_transition(state: dict, event: dict) -> dict:
-    match event.get("type"):
-        case "Inc":
-            return {**state, "count": state["count"] - event.get("n", 1)}
-        case _:
-            return state
+# 3. Run
+def main() -> None:
+    u = Universe(spec=spec, transition=transition)
 
-
-# -- Usage ---------------------------------------------------------------------
-
-
-def main():
-    u = Universe(spec=spec, transition=counter_transition)
-    print(f"Initial: {u.state}")
-
-    # Increment by 1
-    r = u.apply({"type": "Inc", "n": 1})
-    match r:
-        case Ok(state=s):
-            print(f"After +1: {s}")
-        case Impossible(why=why):
-            print("impossible", why)
-            return
-        case Violated(why=why):
-            print("violated", why)
-            return
-
-    # Increment by 5
-    r = u.apply({"type": "Inc", "n": 5})
-    assert isinstance(r, Ok)
-    print(f"After +5: {u.state}")
-
-    # Reduce a batch
-    u.reset()
-    r = u.reduce([{"type": "Inc", "n": i} for i in range(1, 6)])
-    assert isinstance(r, Ok)
-    print(f"After 1+2+3+4+5: {u.state}")
-
-    # Stream
-    u.reset()
-    for result in u.stream([{"type": "Inc", "n": 10}, {"type": "Inc", "n": 20}]):
+    # Mix valid + schema-rejected events
+    for event in [
+        {"type": "Inc", "n": 1},
+        {"type": "Inc", "n": 5},
+        {"type": "Other"},                    # event_schema: unknown type
+        {"type": "Inc", "n": "five"},         # event_schema: n must be int
+    ]:
+        result = u.apply(event)
         match result:
             case Ok(state=s):
-                print(f"  stream step: count={s['count']}")
+                print(f"  ok: count={s['count']}")
+            case Impossible(why=w):
+                print(f"  rejected: {w.message}")
+            case Violated(why=w):
+                print(f"  BUG: {w.message}")
 
-    print("Counter example passed.")
+    print(f"\nFinal count via u.get(): {u.get('count')}")
+
+    # Simulate collects trajectory + step hashes (KC-3)
+    u.reset()
+    run = u.simulate([{"type": "Inc", "n": 10}, {"type": "Inc", "n": 3}])
+    print(f"\nSimulated {run.processed} events, final={run.final_state}")
+    print(f"Step hashes: {[h[:8] for h in run.step_hashes]}")
 
 
 if __name__ == "__main__":

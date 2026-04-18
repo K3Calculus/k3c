@@ -1,154 +1,97 @@
-"""
-Example 05: Rate Limiter -- Sliding window with bounded liveness.
+"""05 — Rate Limiter
 
-A rate limiter that allows N requests per window. Uses timestamps in events
-(determinism rule: no now() in transitions).
+Sliding-window counter with In() membership test and Permit denied=.
 
-Demonstrates: Spec (frozen dataclass), Permit guards, Maintain invariants,
-              EmbeddedRuntime for projection hooks, Universe for fuzz.
+Demonstrates:
+- IR sugar: AnyOf via |, In via .in_()
+- Permit denied= for rich rejection messages
+- u.stream() for processing event sequences
 """
+
+from __future__ import annotations
 
 from k3c import (
-    Spec,
-    Permit,
-    Maintain,
-    Universe,
-    Ok,
-    Impossible,
-    EmbeddedRuntime,
     Always,
-    Compare,
-    CmpOp,
+    Concat,
     Field,
+    Impossible,
+    LStr,
+    Maintain,
+    Ok,
+    Permit,
+    S,
+    Spec,
+    Universe,
     Var,
-    LInt,
-    LBool,
+    k3,
 )
 
 
-# -- Spec (declarative, frozen dataclass) --------------------------------------
+WINDOW_LIMIT = 5
 
-MAX_REQUESTS = 5
-WINDOW_SECONDS = 60
 
-rate_spec = Spec(
+spec = Spec(
     name="rate_limiter",
-    state0={
-        "request_count": 0,
-        "window_start": 0,
-        "total_requests": 0,
-        "total_rejected": 0,
-    },
+    state0={"count": 0, "window_start": 0, "current_time": 0},
     permits=(
-        # Guard: under rate limit
+        # Allow Request only if under the window limit
         Permit(
             name="under_limit",
-            when=Compare(
-                CmpOp.LT, Field(Var("state"), "request_count"), LInt(MAX_REQUESTS)
-            ),
             on="Request",
+            when=k3(S.count < WINDOW_LIMIT),
+            denied=Concat(
+                Concat(LStr("rate limit exceeded: "), Field(Var("state"), "count")),
+                LStr(f"/{WINDOW_LIMIT}"),
+            ),
         ),
-        # Guard: reset is always allowed
-        Permit(name="reset_ok", when=LBool(True), on="ResetWindow"),
+        # Tick to advance time is always allowed
+        Permit(name="tick", on="Tick", when=k3(S.current_time >= 0)),
+        # Reset is allowed at any time
+        Permit(name="reset", on="Reset", when=k3(S.count >= 0)),
     ),
     maintains=(
-        # Invariant: request count never exceeds max
-        Maintain(
-            name="max_requests",
-            expr=Always(
-                Compare(
-                    CmpOp.LE,
-                    Field(Var("state"), "request_count"),
-                    LInt(MAX_REQUESTS),
-                )
-            ),
-        ),
-        # Invariant: total_requests >= request_count
-        Maintain(
-            name="total_consistency",
-            expr=Always(
-                Compare(
-                    CmpOp.GE,
-                    Field(Var("state"), "total_requests"),
-                    Field(Var("state"), "request_count"),
-                )
-            ),
-        ),
+        # Counter never exceeds window limit
+        Maintain(name="bounded", expr=Always(k3(S.count <= WINDOW_LIMIT))),
     ),
 )
 
 
-# -- Transition function (plain function, no System class) ---------------------
+WINDOW_SIZE = 10  # logical time units
 
 
-def rate_transition(state: dict, event: dict) -> dict:
+def transition(state: dict, event: dict) -> dict:
     match event.get("type"):
         case "Request":
-            return {
-                **state,
-                "request_count": state["request_count"] + 1,
-                "total_requests": state["total_requests"] + 1,
-            }
-        case "ResetWindow":
-            return {
-                **state,
-                "request_count": 0,
-                "window_start": event.get("timestamp", 0),
-            }
+            return {**state, "count": state["count"] + 1}
+        case "Tick":
+            new_time = state["current_time"] + 1
+            # Reset window if we've moved past it
+            if new_time - state["window_start"] >= WINDOW_SIZE:
+                return {**state, "current_time": new_time, "window_start": new_time, "count": 0}
+            return {**state, "current_time": new_time}
+        case "Reset":
+            return {**state, "count": 0, "window_start": state["current_time"]}
         case _:
             return state
 
 
-# -- Usage ---------------------------------------------------------------------
+def main() -> None:
+    u = Universe(spec=spec, transition=transition)
 
+    # 6 requests in a row — 5 should pass, 6th rejected
+    events = [{"type": "Request"} for _ in range(6)]
+    for i, result in enumerate(u.stream(events), 1):
+        match result:
+            case Ok(state=s):
+                print(f"  req {i}: ok    count={s['count']}")
+            case Impossible(why=w):
+                print(f"  req {i}: deny  {w.message}")
 
-def main():
-    # EmbeddedRuntime for projection hooks
-    runtime = EmbeddedRuntime(
-        spec=rate_spec,
-        transition=rate_transition,
-        projection_hooks={
-            "remaining": lambda state, event, ctx: (
-                MAX_REQUESTS - state["request_count"]
-            ),
-            "stats": lambda state, event, ctx: {
-                "total": state["total_requests"],
-                "rejected": state["total_rejected"],
-                "current_window": state["request_count"],
-            },
-        },
-    )
-    u = runtime.universe()
-
-    # Send requests up to the limit
-    for i in range(MAX_REQUESTS):
-        r = u.apply({"type": "Request", "client": "user_1"})
-        assert isinstance(r, Ok)
-        print(f"Request {i + 1}: remaining={r.projections['remaining']}")
-
-    # Next request should be rejected
-    r = u.apply({"type": "Request", "client": "user_1"})
-    assert isinstance(r, Impossible)
-    print(f"Request {MAX_REQUESTS + 1}: REJECTED -- {r.why.rule}")
-
-    # Reset window
-    r = u.apply({"type": "ResetWindow", "timestamp": 60})
-    assert isinstance(r, Ok)
-    print(f"\nWindow reset: remaining={r.projections['remaining']}")
-
-    # Now requests work again
-    r = u.apply({"type": "Request", "client": "user_1"})
-    assert isinstance(r, Ok)
-    print(f"After reset: remaining={r.projections['remaining']}")
-
-    print(f"\nStats: {u.state}")
-
-    # Fuzz (Universe supports fuzz; EmbeddedUniverse does not)
-    u_fuzz = Universe(spec=rate_spec, transition=rate_transition)
-    report = u_fuzz.fuzz(sequences=100, steps=30, seed=42)
-    print(f"Fuzz: passed={report.passed}")
-
-    print("\nRate limiter example passed.")
+    # After Reset, requests resume
+    print("\nAfter Reset:")
+    u.apply({"type": "Reset"})
+    r = u.apply({"type": "Request"})
+    print(f"  req: ok  count={u.get('count')}" if isinstance(r, Ok) else "  unexpected")
 
 
 if __name__ == "__main__":

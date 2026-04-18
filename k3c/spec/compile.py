@@ -18,6 +18,7 @@ from k3c.cache import K3Cache
 from k3c.ir.expr import Always, And, Eventually, Expr, Implies, Not, Or, Until, Within
 from k3c.spec.extract import DecodePlan
 from k3c.spec.model import (
+    EventDef,
     Korrelator,
     Maintain,
     Migration,
@@ -156,6 +157,9 @@ class CompiledSpec:
     # V -- Validates (event-scoped)
     validates: dict[str, tuple[Validate, ...]]
 
+    # E -- Event schemas (indexed by name)
+    events: dict[str, EventDef]
+
     # K -- Korrelator (declarative)
     korrelator: Korrelator | None
 
@@ -196,6 +200,8 @@ def compile_spec(spec: Spec, *, hash_fn: str = "sha256") -> CompiledSpec:
         validates_index.setdefault(v.on, []).append(v)
     validates_frozen = {k: tuple(v) for k, v in validates_index.items()}
 
+    events_index = {e.name: e for e in spec.events}
+
     return CompiledSpec(
         name=spec.name,
         state0=spec.state0,
@@ -206,6 +212,7 @@ def compile_spec(spec: Spec, *, hash_fn: str = "sha256") -> CompiledSpec:
         bounded=bounded,
         liveness=liveness,
         validates=validates_frozen,
+        events=events_index,
         projections=spec.projections,
         outputs=spec.outputs,
         korrelator=spec.korrelator,

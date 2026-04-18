@@ -1,223 +1,131 @@
-"""
-Example 04: Inventory System -- Conservation invariant + korrelator.
+"""04 — Inventory with Validate clause
 
-An inventory system where items are received and sold.
-The spec ensures:
-  - Stock never goes negative
-  - Total units is conserved (received - sold = current stock)
-  - Korrelator checks impl state matches spec state
+The Validate clause is event-scoped: it can read EventField AND state.
+Use it for "permitted but invalid" cases where a Permit alone isn't enough.
 
-Demonstrates: Spec (frozen dataclass), Require with Expr transitions,
-              EmbeddedRuntime with korrelate_hook and projection hooks,
-              Universe for fuzz testing.
+Demonstrates:
+- Validate clause with on=, EventField access, structured field/constraint
+- Severity.WARNING for non-fatal validation issues
+- Conservation invariant via Maintain
+- Outputs (declarative, post-causal)
 """
+
+from __future__ import annotations
 
 from k3c import (
-    Spec,
-    Permit,
-    Require,
-    Maintain,
-    Universe,
-    Ok,
-    Impossible,
-    EmbeddedRuntime,
     Always,
-    Compare,
-    CmpOp,
-    Arith,
-    ArithOp,
-    Field,
-    Var,
+    E,
+    EventDef,
     EventField,
-    LInt,
-    With,
+    FieldDef,
+    LStr,
+    Maintain,
+    Ok,
+    Output,
+    Permit,
+    Record,
+    S,
+    Severity,
+    Spec,
+    Universe,
+    Validate,
+    Violated,
+    Warning,
+    k3,
 )
+from k3c.ir.types import TInt
 
 
-# -- Spec (declarative, frozen dataclass) --------------------------------------
-
-inventory_spec = Spec(
+spec = Spec(
     name="inventory",
-    state0={
-        "stock": 50,
-        "total_received": 50,
-        "total_sold": 0,
-    },
-    permits=(
-        Permit(
-            name="can_sell",
-            when=Compare(CmpOp.GE, Field(Var("state"), "stock"), EventField("qty")),
-            on="Sell",
-        ),
-        Permit(
-            name="positive_receive",
-            when=Compare(CmpOp.GT, EventField("qty"), LInt(0)),
-            on="Receive",
-        ),
+    state0={"sold": 0, "stock": 100, "total_received": 100},
+    events=(
+        EventDef(name="Sell",    fields=(FieldDef(name="qty", type=TInt()),)),
+        EventDef(name="Restock", fields=(FieldDef(name="qty", type=TInt()),)),
     ),
-    requires=(
-        # Advance spec_state to track intended stock on Receive
-        Require(
-            name="track_receive",
-            on="Receive",
-            transition=With(
-                Var("spec_state"),
-                (
-                    (
-                        "stock",
-                        Arith(
-                            ArithOp.ADD,
-                            Field(Var("spec_state"), "stock"),
-                            EventField("qty"),
-                        ),
-                    ),
-                    (
-                        "total_received",
-                        Arith(
-                            ArithOp.ADD,
-                            Field(Var("spec_state"), "total_received"),
-                            EventField("qty"),
-                        ),
-                    ),
-                ),
-            ),
-        ),
-        # Advance spec_state to track intended stock on Sell
-        Require(
-            name="track_sell",
+    permits=(
+        # Allow Sell only if stock available
+        Permit(name="has_stock", on="Sell", when=k3(S.stock >= E.qty)),
+        Permit(name="any", when=k3(S.stock >= 0)),
+    ),
+    validates=(
+        # Sells > 50 produce a Warning (large order alert) — not fatal
+        Validate(
+            name="large_order",
             on="Sell",
-            transition=With(
-                Var("spec_state"),
-                (
-                    (
-                        "stock",
-                        Arith(
-                            ArithOp.SUB,
-                            Field(Var("spec_state"), "stock"),
-                            EventField("qty"),
-                        ),
-                    ),
-                    (
-                        "total_sold",
-                        Arith(
-                            ArithOp.ADD,
-                            Field(Var("spec_state"), "total_sold"),
-                            EventField("qty"),
-                        ),
-                    ),
-                ),
-            ),
+            check=k3(E.qty <= 50),
+            severity=Severity.WARNING,
+            field="qty",
+            constraint="<= 50",
+        ),
+        # SKU must match the expected pattern (regex via Matches still available)
+        Validate(
+            name="positive_qty",
+            on="Sell",
+            check=k3(E.qty > 0),
+            field="qty",
+            constraint="> 0",
         ),
     ),
     maintains=(
-        # Safety: stock never negative
-        Maintain(
-            name="non_negative_stock",
-            expr=Always(Compare(CmpOp.GE, Field(Var("state"), "stock"), LInt(0))),
-        ),
-        # Conservation: received - sold = stock
+        # Conservation: sold + stock == total_received (always)
         Maintain(
             name="conservation",
-            expr=Always(
-                Compare(
-                    CmpOp.EQ,
-                    Field(Var("state"), "stock"),
-                    Arith(
-                        ArithOp.SUB,
-                        Field(Var("state"), "total_received"),
-                        Field(Var("state"), "total_sold"),
-                    ),
-                )
-            ),
+            expr=Always(k3((S.sold + S.stock) == S.total_received)),
+        ),
+    ),
+    outputs=(
+        # Emit a "receipt" output for every Sell
+        Output(
+            name="receipt",
+            on="Sell",
+            expr=Record((
+                ("type", LStr("Receipt")),
+                ("qty_sold", EventField("qty")),
+            )),
         ),
     ),
 )
 
 
-# -- Transition function (plain function, no System class) ---------------------
-
-
-def inventory_transition(state: dict, event: dict) -> dict:
+def transition(state: dict, event: dict) -> dict:
     match event.get("type"):
-        case "Receive":
-            qty = event["qty"]
+        case "Sell":
+            qty = event.get("qty", 0)
+            return {**state, "sold": state["sold"] + qty, "stock": state["stock"] - qty}
+        case "Restock":
+            qty = event.get("qty", 0)
             return {
                 **state,
                 "stock": state["stock"] + qty,
                 "total_received": state["total_received"] + qty,
             }
-        case "Sell":
-            qty = event["qty"]
-            return {
-                **state,
-                "stock": state["stock"] - qty,
-                "total_sold": state["total_sold"] + qty,
-            }
         case _:
             return state
 
 
-# -- Usage ---------------------------------------------------------------------
+def main() -> None:
+    u = Universe(spec=spec, transition=transition)
 
+    events = [
+        {"type": "Sell", "qty": 10},      # Ok + Receipt output
+        {"type": "Sell", "qty": 75},      # Warning (large_order > 50)
+        {"type": "Sell", "qty": -5},      # Violated (positive_qty failed)
+    ]
 
-def main():
-    # EmbeddedRuntime with korrelate_hook and projection hooks
-    runtime = EmbeddedRuntime(
-        spec=inventory_spec,
-        transition=inventory_transition,
-        projection_hooks={
-            "stock_level": lambda state, event, ctx: state["stock"],
-            "utilization": lambda state, event, ctx: (
-                round(state["total_sold"] / state["total_received"] * 100, 1)
-                if state["total_received"] > 0
-                else 0.0
-            ),
-        },
-        korrelate_hook=lambda actual, intended: actual["stock"] == intended["stock"],
-    )
-    u = runtime.universe()
-
-    # Receive stock
-    r = u.apply({"type": "Receive", "qty": 30})
-    assert isinstance(r, Ok)
-    print(
-        f"Received 30: stock={r.projections['stock_level']}, utilization={r.projections['utilization']}%"
-    )
-
-    # Sell some
-    r = u.apply({"type": "Sell", "qty": 20})
-    assert isinstance(r, Ok)
-    print(
-        f"Sold 20: stock={r.projections['stock_level']}, utilization={r.projections['utilization']}%"
-    )
-
-    # Try to oversell
-    r = u.apply({"type": "Sell", "qty": 100})
-    assert isinstance(r, Impossible)
-    print(f"Oversell: {r.why.rule} -- REJECTED")
-
-    # Try to receive 0 items
-    r = u.apply({"type": "Receive", "qty": 0})
-    assert isinstance(r, Impossible)
-    print(f"Zero receive: {r.why.rule} -- REJECTED")
-
-    # Verify conservation holds
-    print("\nConservation check:")
-    print(
-        f"  received={u.state['total_received']}, sold={u.state['total_sold']}, stock={u.state['stock']}"
-    )
-    print(
-        f"  {u.state['total_received']} - {u.state['total_sold']} = {u.state['stock']} (correct)"
-    )
-
-    # Fuzz (Universe supports fuzz; EmbeddedUniverse does not)
-    u_fuzz = Universe(spec=inventory_spec, transition=inventory_transition)
-    report = u_fuzz.fuzz(sequences=200, steps=30, seed=42)
-    print(
-        f"\nFuzz: passed={report.passed}, steps={report.total_steps}, impossible={report.impossible_count}"
-    )
-
-    print("\nInventory example passed.")
+    for event in events:
+        result = u.apply(event)
+        match result:
+            case Ok(state=s, outputs=outputs):
+                print(f"  ok       sold={s['sold']:3d} stock={s['stock']:3d}  outputs={list(outputs)}")
+            case Warning(state=s, why=w, outputs=outputs):
+                print(f"  warning  sold={s['sold']:3d} stock={s['stock']:3d}  ({w.rule})  outputs={list(outputs)}")
+            case Violated(why=w):
+                print(f"  BUG      {w.rule}: {w.message}")
+                # Why also exposes the structured field/constraint detail
+                for line in w.messages:
+                    print(f"    - {line}")
+                break
 
 
 if __name__ == "__main__":

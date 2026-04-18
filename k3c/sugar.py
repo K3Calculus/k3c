@@ -37,11 +37,13 @@ Usage:
 from __future__ import annotations
 
 from k3c.ir.expr import (
+    After,
     AllOf,
     And,
     AnyOf,
     Arith,
     ArithOp,
+    Before,
     CmpOp,
     Compare,
     EventField,
@@ -51,6 +53,7 @@ from k3c.ir.expr import (
     LBool,
     LFloat,
     LInt,
+    LNull,
     LStr,
     Not,
     Or,
@@ -59,9 +62,11 @@ from k3c.ir.expr import (
 
 
 def _lift(value: object) -> Expr:
-    """Lift a Python value or Q to an IR Expr."""
+    """Lift a Python value, Q, or raw IR Expr node to an IR Expr."""
     if isinstance(value, Q):
         return value._expr
+    if value is None:
+        return LNull()
     if isinstance(value, bool):
         return LBool(value)
     if isinstance(value, int):
@@ -70,6 +75,9 @@ def _lift(value: object) -> Expr:
         return LFloat(value)
     if isinstance(value, str):
         return LStr(value)
+    # Raw IR Expr nodes (LInt(0), Field(...), etc.) — pass through
+    if hasattr(value, "__dataclass_fields__"):
+        return value  # type: ignore[return-value]
     msg = f"Cannot lift value of type {type(value).__name__} to Expr"
     raise TypeError(msg)
 
@@ -263,3 +271,13 @@ def any_of(*exprs: object) -> Q:
 def lit(value: object) -> Q:
     """Wrap a literal value as a Q for explicit lifting."""
     return Q(_lift(value))
+
+
+def before(field: str) -> Q:
+    """Sugar: before('x') -> Q(Before('x')). Reference state field from previous step."""
+    return Q(Before(field))
+
+
+def after(field: str) -> Q:
+    """Sugar: after('x') -> Q(After('x')). Reference state field from current step."""
+    return Q(After(field))

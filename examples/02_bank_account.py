@@ -1,135 +1,116 @@
-"""
-Example 02: Bank Account -- Guards, invariants, projections, and outputs.
+"""02 — Bank Account
 
-Demonstrates: permit with event filter, maintain, EmbeddedRuntime for
-projection and output hooks, Impossible, fuzz.
+Permits with rich denial messages, invariants with severity, sugar.
+
+Demonstrates:
+- Permit with `denied=` IR Expression (rich rejection messages)
+- Maintain with severity (ERROR vs WARNING)
+- IR sugar: S, E, k3, AnyOf via |
+- Warning result: state advances, processing continues
 """
+
+from __future__ import annotations
 
 from k3c import (
     Always,
-    CmpOp,
-    Compare,
-    EmbeddedRuntime,
-    EventField,
+    Concat,
+    E,
+    EventDef,
     Field,
+    FieldDef,
     Impossible,
-    LInt,
+    LStr,
     Maintain,
     Ok,
     Permit,
+    S,
+    Severity,
     Spec,
+    Universe,
     Var,
+    Violated,
+    Warning,
+    k3,
 )
+from k3c.ir.types import TInt
 
-# -- Spec (declarative, no callables) -----------------------------------------
 
-bank_spec = Spec(
-    name="bank_account",
-    state0={"balance": 100, "txn_count": 0},
+spec = Spec(
+    name="bank",
+    state0={"balance": 1000, "frozen": False},
+    # Typed events — engine enforces shape (unknown types/missing fields rejected)
+    events=(
+        EventDef(name="Deposit",  fields=(FieldDef(name="amount", type=TInt()),)),
+        EventDef(name="Withdraw", fields=(FieldDef(name="amount", type=TInt()),)),
+        EventDef(name="Freeze"),
+    ),
     permits=(
+        # Withdraw needs sufficient funds; rich denial includes actual balance
         Permit(
             name="has_funds",
-            when=Compare(
-                CmpOp.GE, Field(Var("state"), "balance"), EventField("amount")
-            ),
             on="Withdraw",
+            when=k3(S.balance >= E.amount),
+            denied=Concat(
+                Concat(LStr("insufficient funds: balance="), Field(Var("state"), "balance")),
+                Concat(LStr(", requested="), Field(Var("event"), "amount")),
+            ),
+        ),
+        # Account must not be frozen for any debit/credit
+        Permit(
+            name="not_frozen",
+            when=k3(~S.frozen),
+            denied=k3(LStr("account is frozen")),
         ),
     ),
     maintains=(
+        # ERROR: balance must never go negative
+        Maintain(name="non_negative", expr=Always(k3(S.balance >= 0))),
+        # WARNING: balance below 200 produces Warning, not Violated
         Maintain(
-            name="non_negative",
-            expr=Always(Compare(CmpOp.GE, Field(Var("state"), "balance"), LInt(0))),
+            name="low_balance",
+            expr=Always(k3(S.balance >= 200)),
+            severity=Severity.WARNING,
         ),
     ),
 )
 
 
-# -- Transition ----------------------------------------------------------------
-
-
-def bank_transition(state: dict, event: dict) -> dict:
+def transition(state: dict, event: dict) -> dict:
     match event.get("type"):
-        case "Withdraw":
-            return {
-                **state,
-                "balance": state["balance"] - event["amount"],
-                "txn_count": state["txn_count"] + 1,
-            }
         case "Deposit":
-            return {
-                **state,
-                "balance": state["balance"] + event["amount"],
-                "txn_count": state["txn_count"] + 1,
-            }
+            return {**state, "balance": state["balance"] + event["amount"]}
+        case "Withdraw":
+            return {**state, "balance": state["balance"] - event["amount"]}
+        case "Freeze":
+            return {**state, "frozen": True}
         case _:
             return state
 
 
-# -- EmbeddedRuntime (hooks at the boundary) -----------------------------------
+def main() -> None:
+    u = Universe(spec=spec, transition=transition)
 
-runtime = EmbeddedRuntime(
-    spec=bank_spec,
-    transition=bank_transition,
-    projection_hooks={
-        "balance": lambda s, e, ctx: s["balance"],
-        "is_healthy": lambda s, e, ctx: s["balance"] > 50,
-    },
-    output_hooks={
-        "receipt": lambda s, e, ns: (
-            {
-                "type": "Receipt",
-                "action": e.get("type"),
-                "amount": e.get("amount", 0),
-                "balance_after": ns["balance"],
-            }
-            if e.get("type") == "Withdraw"
-            else None
-        ),
-        "low_balance_alert": lambda s, e, ns: (
-            {"type": "LowBalanceAlert", "balance": ns["balance"]}
-            if ns["balance"] < 20
-            else None
-        ),
-    },
-)
+    events = [
+        {"type": "Deposit", "amount": 50},               # Ok
+        {"type": "Withdraw", "amount": 950},              # Ok but Warning
+        {"type": "Withdraw", "amount": 200},              # Impossible (denied=)
+        {"type": "Withdraw", "amount": "lots"},           # Impossible (event_schema: wrong type)
+        {"type": "BogusEvent"},                           # Impossible (event_schema: unknown type)
+        {"type": "Freeze"},                               # Ok
+        {"type": "Deposit", "amount": 100},               # Impossible (frozen)
+    ]
 
-
-# -- Usage ---------------------------------------------------------------------
-
-
-def main():
-    u = runtime.universe()
-
-    # 1. Deposit
-    r = u.apply({"type": "Deposit", "amount": 200})
-    assert isinstance(r, Ok)
-    print(
-        f"Deposit 200: balance={r.projections['balance']}, healthy={r.projections['is_healthy']}"
-    )
-
-    # 2. Withdraw with receipt
-    r = u.apply({"type": "Withdraw", "amount": 50})
-    assert isinstance(r, Ok)
-    print(f"Withdraw 50: balance={r.projections['balance']}")
-    receipt = next((o for o in r.outputs if o.get("type") == "Receipt"), None)
-    if receipt:
-        print(f"  Receipt: {receipt}")
-
-    # 3. Overdraw attempt -- Impossible
-    r = u.apply({"type": "Withdraw", "amount": 999})
-    assert isinstance(r, Impossible)
-    print(f"Overdraw: {r.why.rule} -- {r.why.messages[0]}")
-    print(f"  Balance unchanged: {u.state['balance']}")
-
-    # 4. Withdraw to trigger low balance alert
-    r = u.apply({"type": "Withdraw", "amount": 240})
-    assert isinstance(r, Ok)
-    print(f"Large withdraw: balance={r.projections['balance']}")
-    alert = next((o for o in r.outputs if o.get("type") == "LowBalanceAlert"), None)
-    if alert:
-        print(f"  Alert: {alert}")
-
-    print("\nBank account example passed.")
+    for event in events:
+        result = u.apply(event)
+        match result:
+            case Ok(state=s):
+                print(f"  ok        balance={s['balance']}")
+            case Warning(state=s, why=w):
+                print(f"  warning   balance={s['balance']}  ({w.rule}: {w.message})")
+            case Impossible(why=w):
+                print(f"  rejected  {w.message}")
+            case Violated(why=w):
+                print(f"  BUG       {w.message}")
 
 
 if __name__ == "__main__":

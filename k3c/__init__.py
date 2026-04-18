@@ -115,6 +115,7 @@ from k3c.ir.expr import (
     LFloat,
     LInt,
     LList,
+    LNull,
     LStr,
     Length,
     Map,
@@ -128,6 +129,7 @@ from k3c.ir.expr import (
     Or,
     Record,
     Slice,
+    Str,
     Trim,
     Until,
     UnwrapOr,
@@ -193,7 +195,7 @@ from k3c.ir.serde import type_from_dict, type_to_dict
 from k3c.spec.serde import spec_from_dict, spec_to_dict
 
 # -- Sugar ---------------------------------------------------------------------
-from k3c.sugar import E, Q, S, SS, all_of, any_of, k3, lit
+from k3c.sugar import E, Q, S, SS, after, all_of, any_of, before, k3, lit
 
 # -- Protocol DSL --------------------------------------------------------------
 from k3c.protocol import Protocol
@@ -277,6 +279,7 @@ __all__ = [
     "LInt",
     "LFloat",
     "LStr",
+    "LNull",
     "LList",
     "Var",
     "Field",
@@ -313,6 +316,7 @@ __all__ = [
     "Concat",
     "Trim",
     "Slice",
+    "Str",
     "Matches",
     "Record",
     "With",
@@ -394,6 +398,8 @@ __all__ = [
     "lit",
     "all_of",
     "any_of",
+    "before",
+    "after",
     # Protocol
     "Protocol",
     # Attestation

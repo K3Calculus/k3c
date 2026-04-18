@@ -138,12 +138,14 @@ class BridgedUniverse:
         return self._mode
 
     def apply(self, event: dict[str, object]) -> StepResult[dict[str, object]]:
+        # Capture state BEFORE applying so mapper sees true (pre, post).
+        state_before = self._source.state
         source_result = self._source.apply(event)
         if not isinstance(source_result, Ok):
             return source_result
 
         target_event = self._mapper(
-            cast(_State, source_result.state),
+            cast(_State, state_before),
             event,
             cast(_State, source_result.state),
         )

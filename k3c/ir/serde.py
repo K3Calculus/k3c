@@ -49,6 +49,7 @@ from k3c.ir.expr import (
     LFloat,
     LInt,
     LList,
+    LNull,
     LStr,
     Map,
     Matches,
@@ -61,6 +62,7 @@ from k3c.ir.expr import (
     Or,
     Record,
     Slice,
+    Str,
     Trim,
     Until,
     UnwrapOr,
@@ -107,6 +109,8 @@ def to_dict(node: Expr) -> dict[str, object]:
             return {"type": "LFloat", "val": v}
         case LStr(val=v):
             return {"type": "LStr", "val": v}
+        case LNull():
+            return {"type": "LNull"}
         case LList(elements=elems):
             return {"type": "LList", "elements": [to_dict(e) for e in elems]}
 
@@ -231,6 +235,8 @@ def to_dict(node: Expr) -> dict[str, object]:
             return {"type": "Concat", "left": to_dict(le), "right": to_dict(re)}
         case Trim(expr=e):
             return {"type": "Trim", "expr": to_dict(e)}
+        case Str(expr=e):
+            return {"type": "Str", "expr": to_dict(e)}
         case Slice(expr=e, start=s, end=en):
             return {
                 "type": "Slice",
@@ -288,6 +294,7 @@ _EXPR_NODES: dict[str, type] = {
     "Abs": Abs,
     "Length": Length,
     "Trim": Trim,
+    "Str": Str,
 }
 
 _BINARY_NODES: dict[str, type] = {
@@ -329,6 +336,8 @@ def _fields_from_list(data: list[object], node: str) -> tuple[tuple[str, Expr], 
 def _from_dict_literal(node_type: str, data: dict[str, object]) -> Expr | None:
     """Parse literal nodes. Returns None if node_type is not a literal."""
     match node_type:
+        case "LNull":
+            return LNull()
         case "LBool":
             val = data["val"]
             if not isinstance(val, bool):

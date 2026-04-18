@@ -99,6 +99,105 @@ def _build_eval_ctx(
     return eval_ctx
 
 
+# -- Event schema check (when EventDefs are declared) ------------------------
+
+
+_TYPE_CHECKS = {
+    "TInt": lambda v: isinstance(v, int) and not isinstance(v, bool),
+    "TBool": lambda v: isinstance(v, bool),
+    "TFloat": lambda v: isinstance(v, (int, float)) and not isinstance(v, bool),
+    "TString": lambda v: isinstance(v, str),
+    "TBytes": lambda v: isinstance(v, (bytes, bytearray)),
+    "TUnit": lambda v: v is None,
+    "TList": lambda v: isinstance(v, (list, tuple)),
+    "TRecord": lambda v: isinstance(v, dict),
+    "TOption": lambda v: True,  # accept any (None or value)
+    "TEnum": lambda v: isinstance(v, str),
+}
+
+
+def _type_matches(value: object, type_node: object) -> bool:
+    """Check a value against an ExprType node. Conservative — unknown types pass."""
+    type_name = type(type_node).__name__
+    check = _TYPE_CHECKS.get(type_name)
+    if check is None:
+        return True
+    if type_name == "TEnum" and isinstance(value, str):
+        values = getattr(type_node, "values", ())
+        return value in values
+    return check(value)
+
+
+def _check_event_schema(
+    compiled: CompiledSpec,
+    event: dict[str, object],
+    state: dict[str, object],
+    ctx: SpecCtx,
+    step_hash: str,
+) -> Why | None:
+    """If EventDefs are declared, validate event has the right shape.
+
+    Unknown event types -> Impossible.
+    Required fields missing or wrong-typed -> Impossible.
+    """
+    if not compiled.events:
+        return None
+
+    event_type = event.get("type")
+    if not isinstance(event_type, str):
+        return Why(
+            rule="event_schema",
+            kind=WhyKind.MISSING,
+            messages=("event missing 'type' field",),
+            before=state, after=None, event=event, ctx=ctx,
+            expected=None, trace=ctx.snapshot_trace(), step_hash=step_hash,
+        )
+
+    event_def = compiled.events.get(event_type)
+    if event_def is None:
+        known = sorted(compiled.events.keys())
+        return Why(
+            rule="event_schema",
+            kind=WhyKind.MISSING,
+            messages=(
+                f"unknown event type {event_type!r}",
+                f"known types: {known}",
+            ),
+            before=state, after=None, event=event, ctx=ctx,
+            expected=None, trace=ctx.snapshot_trace(), step_hash=step_hash,
+        )
+
+    # Check declared fields
+    for field_def in event_def.fields:
+        if field_def.name not in event:
+            if field_def.required:
+                return Why(
+                    rule="event_schema",
+                    kind=WhyKind.MISSING,
+                    messages=(
+                        f"event {event_type!r} missing required field {field_def.name!r}",
+                    ),
+                    before=state, after=None, event=event, ctx=ctx,
+                    expected=None, trace=ctx.snapshot_trace(), step_hash=step_hash,
+                )
+            continue
+        value = event[field_def.name]
+        if not _type_matches(value, field_def.type):
+            type_name = type(field_def.type).__name__
+            return Why(
+                rule="event_schema",
+                kind=WhyKind.MISSING,
+                messages=(
+                    f"event {event_type!r} field {field_def.name!r} type mismatch: "
+                    f"expected {type_name}, got {type(value).__name__} ({value!r})",
+                ),
+                before=state, after=None, event=event, ctx=ctx,
+                expected=None, trace=ctx.snapshot_trace(), step_hash=step_hash,
+            )
+
+    return None
+
+
 # -- G check: guards ----------------------------------------------------------
 
 
@@ -612,6 +711,11 @@ def apply_step(
                 step_hash=step_hash,
             )
         )
+
+    # 1c. Event schema check (when EventDefs are declared)
+    schema_failure = _check_event_schema(compiled, domain_event, state, ctx, step_hash)
+    if schema_failure is not None:
+        return Impossible(why=schema_failure)
 
     # 2. G check
     eval_ctx = _build_eval_ctx(state, domain_event, ctx)

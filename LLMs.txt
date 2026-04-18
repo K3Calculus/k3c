@@ -1,170 +1,294 @@
 # k3c — Kulkarni Calculus Python SDK
 
-> k3c v0.4.1 | Python >=3.12 | MIT License
+> k3c v0.4.2 | Python >=3.12 | MIT License | Zero required dependencies
 > Homepage: https://k3c.dev | Repository: https://github.com/K3Calculus/k3c
 
 ## What k3c Is
 
-k3c is a Python SDK for the Kulkarni Calculus (K3) — a minimal causal calculus for discrete systems. A system is fully determined by specifying: what events are permitted, how state transforms, what must always be true, and what must eventually become true.
+k3c is a Python SDK for the **Kulkarni Calculus (K3)** — a minimal causal calculus
+for discrete systems. A system is fully determined by specifying:
 
-The core insight: **the spec IS the implementation**. Drift between specification and implementation is structurally impossible because the spec compiles into the system's own guards, transitions, and invariants.
+- What events are **permitted** (guards)
+- How state **transforms** (transitions)
+- What must **always** be true (invariants)
+- What must **eventually** become true (liveness)
+- What is **valid** for a given event (event-scoped validations)
 
-Design axiom: **Design causality, and the system emerges.**
+**The spec IS the implementation.** Drift is structurally impossible because the
+spec compiles into the system's own guards, invariants, and validators.
 
 Philosophical root: **Satkaryavada** (Samkhya) — the effect pre-exists latent in the cause.
 
 ## Install
 
-```
+```bash
 pip install k3c
+# Optional: pip install blake3        # 4-6x faster hashing
+# Optional: pip install cryptography  # for Ed25519 attestation
 ```
 
-Zero required dependencies (stdlib only). Optional: `pip install blake3` for faster hashing.
-
-## The 9-Tuple
-
-K3d (deterministic K3) is the core model. A system is a 9-tuple:
-
-```
-K3d = (S, S0, E, G, T, N, P, Ctx, L)
-
-S    = State space (Python dict)
-S0   = Initial state (dict)
-E    = Event space (dicts with "type" key)
-G    = Guard: admissibility predicate (Permit clauses)
-T    = Transition: S x E -> S (pure function)
-N    = Invariant: safety predicate (Maintain Always clauses)
-P    = Projections: derived views of state
-Ctx  = SpecCtx: ambient witness (flows through steps, never causes)
-L    = Liveness: temporal obligations (Maintain Eventually/Within clauses)
-```
-
-## The Apply Pipeline
-
-Every `u.apply(event)` executes this 9-step pipeline:
-
-```
-1. step_hash = SHA-256(state, event, prev_step_hash)   # chained, tamper-evident
-2. e' = decode(raw_event)                               # raw -> domain event
-3. G check: evaluate permit guards
-   - False -> Impossible(why)
-   - Nothing -> Impossible(why)
-4. s' = transition(state, event)                        # user-supplied pure function
-5. ctx' = require(ctx, event)                           # advance spec_state
-6. N check: safety invariants + korrelation
-   - Failed -> Violated(why)
-7. L track: liveness obligations, timer expiry
-   - Expired -> Violated(why)
-8. P: compute projections and outputs
-9. Return Ok(state=s', ctx=ctx', step_hash=h)
-```
-
-## Result Types
-
-apply() is total — it never raises. It always returns one of:
-
-| Result | Meaning | Bug? |
-|--------|---------|------|
-| `Ok(state, ctx, step_hash)` | Guards passed, invariants held | No |
-| `Warning(state, ctx, step_hash, why)` | Non-fatal issue, state advances | No |
-| `Impossible(why)` | Guard rejected event. State unchanged | No |
-| `Violated(why)` | Invariant broken. Implementation diverged | **Yes** |
-
-## Quick Start
+## 60-second Quick Start
 
 ```python
-from k3c import (
-    Spec, Permit, Maintain, Universe, Ok, Impossible, Violated,
-    Always, Compare, CmpOp, Field, Var, EventField, LInt,
-)
+from k3c import Spec, Permit, Maintain, Universe, Always, S, E, k3, Ok, Impossible, Violated
 
-# 1. Define the spec (declarative, frozen, serializable)
 spec = Spec(
     name="bank",
     state0={"balance": 100},
     permits=(
-        Permit(
-            name="has_funds",
-            on="Withdraw",
-            when=Compare(CmpOp.GE, Field(Var("state"), "balance"), EventField("amount")),
-        ),
+        Permit(name="has_funds", on="Withdraw", when=k3(S.balance >= E.amount)),
     ),
     maintains=(
-        Maintain(
-            name="non_negative",
-            expr=Always(Compare(CmpOp.GE, Field(Var("state"), "balance"), LInt(0))),
-        ),
+        Maintain(name="non_negative", expr=Always(k3(S.balance >= 0))),
     ),
 )
 
-# 2. Write a pure transition function
-def bank_transition(state: dict, event: dict) -> dict:
-    match event.get("type"):
-        case "Deposit":
-            return {**state, "balance": state["balance"] + event["amount"]}
-        case "Withdraw":
-            return {**state, "balance": state["balance"] - event["amount"]}
-        case _:
-            return state
+def transition(state, event):
+    if event["type"] == "Withdraw":
+        return {**state, "balance": state["balance"] - event["amount"]}
+    if event["type"] == "Deposit":
+        return {**state, "balance": state["balance"] + event["amount"]}
+    return state
 
-# 3. Create a Universe and apply events
-u = Universe(spec=spec, transition=bank_transition)
+u = Universe(spec=spec, transition=transition)
 
-match u.apply({"type": "Deposit", "amount": 50}):
-    case Ok(state=s):       print(s["balance"])      # 150
-    case Impossible(why=w): print(w.message)
-    case Violated(why=w):   w.raise_()
-
-match u.apply({"type": "Withdraw", "amount": 200}):
-    case Ok(state=s):       print(s["balance"])
-    case Impossible(why=w): print(w.rule)            # "has_funds"
+match u.apply({"type": "Withdraw", "amount": 50}):
+    case Ok(state=s):       print(s["balance"])     # 50
+    case Impossible(why=w): print(w.message)        # guard rejected
+    case Violated(why=w):   w.raise_()              # bug — invariant broken
 ```
 
-## Sugar — Operator-Overloaded Expressions
+## The Four Result Types
 
-Building IR by hand is verbose. The sugar layer (`S`, `E`, `SS`, `k3()`) lets you write
-guards and invariants in idiomatic Python:
+`apply()` is **total** — it never raises. It always returns one of:
+
+| Result | Meaning | State changes? | Bug? |
+|--------|---------|----------------|------|
+| `Ok(state, ctx, step_hash, projections, outputs)` | Guards passed, invariants held | Yes | No |
+| `Warning(state, ctx, step_hash, why, ...)` | Non-fatal issue (severity=warning) | Yes | No |
+| `Impossible(why)` | Guard rejected event | No | No |
+| `Violated(why)` | Invariant or Validate failed (severity=error) | No-op or rolled back | **Yes** |
+
+## The 9-Tuple
+
+A K3d system is `K3d = (S, S0, E, G, T, N, P, Ctx, L, V)`:
+
+| Element | Role | Defined by |
+|---------|------|------------|
+| S, S0 | State space + initial state | `state0` dict |
+| E | Event space | `EventDef` (optional schema) + dicts with `"type"` key |
+| G | Guards | `Permit` clauses |
+| T | Transition function | Pure `(state, event) -> state` |
+| N | Safety invariants | `Maintain(expr=Always(...))` |
+| P | Projections | `Projection` clauses |
+| Ctx | Spec context (witness) | `Require` clauses |
+| L | Liveness obligations | `Maintain(expr=Always(Eventually(...)))` |
+| V | Event-scoped validations | `Validate` clauses |
+
+## IR Sugar — `S`, `E`, `SS`, `k3`
+
+Building IR by hand is verbose. The sugar layer turns it into Python:
 
 ```python
-from k3c import S, E, k3, all_of, any_of, Permit, Maintain, Always
+from k3c import S, E, SS, k3, all_of, any_of, before, after, lit
 
-# State.balance >= Event.amount  (via operator overloads)
-Permit(name="has_funds", on="Withdraw", when=k3(S.balance >= E.amount))
+# Basic comparisons (operators overloaded)
+S.balance >= E.amount                        # Compare(GE, Field("state", "balance"), EventField("amount"))
+S.role == "admin"                            # equality
+S.count.in_("draft", "placed", "shipped")    # In expression
 
-# Logical combinators: & for And, | for Or, ~ for Not
-Permit(name="active_owner", when=k3((S.role == "owner") & (S.status == "active")))
-Permit(name="any_admin",   when=k3((S.role == "admin") | (S.is_root)))
-
-# Membership
-Permit(name="valid_phase", when=k3(S.phase.in_("idle", "active", "done")))
-
-# Variadic
-Maintain(name="all_pos", expr=Always(k3(all_of(S.a > 0, S.b > 0, S.c > 0))))
+# Logic — use & | ~ (NOT and/or/not, which Python can't overload)
+(S.role == "owner") & (S.balance > 0)
+(S.is_admin) | (S.is_root)
+~S.locked
 
 # Arithmetic
-Permit(name="solvent", when=k3((S.assets - S.liabilities) > 0))
+(S.assets - S.liabilities) > 0
+S.x + S.y * 2
+
+# Variadic
+all_of(S.a > 0, S.b > 0, S.c > 0)            # AllOf
+any_of(S.x == 1, S.x == 2, S.x == 3)         # AnyOf
+
+# Temporal
+after("count") >= before("count")             # After/Before sugar
+
+# Wrap to plain IR at the boundary
+Permit(name="ok", when=k3(S.balance >= E.amount))
 ```
 
 | Sugar | Builds |
 |-------|--------|
-| `S.field` or `S("field")` | `Field(Var("state"), "field")` |
-| `E.field` or `E("field")` | `EventField("field")` |
-| `SS.field` or `SS("field")` | `Field(Var("spec_state"), "field")` |
-| `S.x >= 0` | `Compare(CmpOp.GE, Field(Var("state"), "x"), LInt(0))` |
-| `S.a & S.b` | `And(...)` — use `&` not `and` |
-| `S.a \| S.b` | `Or(...)` — use `\|` not `or` |
+| `S.field` / `S("field")` | `Field(Var("state"), "field")` |
+| `E.field` / `E("field")` | `EventField("field")` |
+| `SS.field` | `Field(Var("spec_state"), "field")` |
+| `S.x >= 0` | `Compare(CmpOp.GE, ..., LInt(0))` |
+| `S.a & S.b` | `And(...)` |
+| `S.a \| S.b` | `Or(...)` |
 | `~S.locked` | `Not(...)` |
 | `S.x.in_("a", "b")` | `In(...)` |
-| `all_of(e1, e2, e3)` | `AllOf(exprs=(...))` |
-| `any_of(e1, e2, e3)` | `AnyOf(exprs=(...))` |
-| `k3(expr_or_value)` | unwrap Q to plain IR (use at boundary) |
+| `all_of(...)`, `any_of(...)` | `AllOf` / `AnyOf` |
+| `before("x")` / `after("x")` | `Before("x")` / `After("x")` |
+| `lit(value)` | wrap a Python literal as a Q |
+| `k3(expr_or_value)` | unwrap Q → plain IR (use at boundary) |
 
-**Pitfall:** `S.x and S.y` raises — Python's `and`/`or` would short-circuit on the wrapper,
-not build IR. Always use `&`, `|`, `~`. The `__bool__` raises with a helpful message if you forget.
+**Pitfall:** `S.x and S.y` raises `TypeError` — Python's `and`/`or` short-circuit on the
+wrapper, not build IR. Always use `&`, `|`, `~`. The `__bool__` raises a helpful message.
+
+## Spec Model
+
+Specs are frozen dataclasses. **No Python callables, no builders. 100% serializable.**
+
+```python
+@dataclass(frozen=True)
+class Spec:
+    name: str
+    state0: dict[str, object]
+    fields: tuple[FieldDef, ...] = ()           # I.domain
+    events: tuple[EventDef, ...] = ()           # event schemas
+    decode: DecodePlan | None = None            # I.decode
+    permits: tuple[Permit, ...] = ()            # G
+    requires: tuple[Require, ...] = ()          # U.spec_state advancement
+    maintains: tuple[Maintain, ...] = ()        # N + L
+    validates: tuple[Validate, ...] = ()        # V (event-scoped)
+    projections: tuple[Projection, ...] = ()    # P
+    outputs: tuple[Output, ...] = ()            # post-causal events
+    korrelator: Korrelator | None = None        # K
+    version: int = 1                             # schema version
+    migrations: tuple[Migration, ...] = ()       # state upgrades
+    protocol_start: str = "__start__"
+```
+
+### Permit — Guards
+
+```python
+Permit(name="has_funds", on="Withdraw", when=k3(S.balance >= E.amount))
+
+# Rich denial messages with denied=
+Permit(
+    name="not_frozen",
+    when=k3(~S.frozen),
+    denied=k3(LStr("account is frozen")),
+)
+Permit(
+    name="has_funds",
+    on="Withdraw",
+    when=k3(S.balance >= E.amount),
+    denied=Concat(LStr("insufficient: balance="), Field(Var("state"), "balance")),
+)
+```
+
+### Maintain — Invariants & Liveness
+
+Routed by structure:
+
+| Pattern | Routes to | Mechanism |
+|---------|-----------|-----------|
+| `Always(phi)` | **N** safety | Checked every step |
+| `Always(Within(phi, n))` | **N+Ctx** bounded | Timer in Ctx |
+| `Always(Eventually(phi))` | **L** liveness | Unbounded obligation |
+
+```python
+Maintain(name="non_neg", expr=Always(k3(S.balance >= 0)))
+
+# Severity: error (default) -> Violated; warning -> Warning result
+Maintain(
+    name="prefer_positive",
+    expr=Always(k3(S.balance > 0)),
+    severity=Severity.WARNING,
+)
+```
+
+### Validate — Event-Scoped Validation
+
+`Validate` is event-scoped (unlike Maintain). It can read `EventField` AND state.
+Use for "permitted but invalid" cases.
+
+```python
+Validate(
+    name="valid_airport",
+    on="RT3",
+    check=Matches(EventField("station"), r"^[A-Z]{3}$"),
+    field="station",
+    constraint="^[A-Z]{3}$",
+    severity=Severity.ERROR,
+    denied=Concat(LStr("invalid airport: "), EventField("station")),
+)
+```
+
+### Output — Post-Causal Events
+
+```python
+Output(
+    name="receipt",
+    on="Withdraw",
+    expr=Record((("type", LStr("Receipt")), ("amount", EventField("amount")))),
+)
+# Available on result.outputs after Ok / Warning
+```
+
+### Korrelator — Correctness Measurement
+
+```python
+Korrelator(
+    actual=Field(Var("state"), "balance"),         # implementation
+    intended=Field(Var("spec_state"), "balance"),  # spec
+    mode=CompareMode.EXACT,                        # EXACT or SUBSET
+)
+```
+
+### EventDef — Typed Event Structure (Enforced)
+
+When `events=(...)` is declared, the engine validates every event against the
+schema between decode and guards. Violations produce `Impossible` with rule=`event_schema`:
+
+- Unknown event type (not in declared events) → `Impossible`
+- Required field missing → `Impossible`
+- Field value has wrong type (TInt expects int, etc.) → `Impossible`
+
+```python
+spec = Spec(
+    name="bank",
+    state0={"balance": 0},
+    events=(
+        EventDef(
+            name="Withdraw",
+            fields=(
+                FieldDef(name="amount",   type=TInt()),
+                FieldDef(name="currency", type=TString(), required=False),
+            ),
+            description="Withdraw funds",
+        ),
+    ),
+    ...
+)
+
+u.apply({"type": "Withdraw", "amount": 50})         # ok
+u.apply({"type": "Withdraw", "amount": "lots"})     # Impossible: type mismatch
+u.apply({"type": "Bogus"})                          # Impossible: unknown type
+u.apply({"type": "Withdraw"})                        # Impossible: missing 'amount'
+```
+
+If `events` is empty (default), no schema enforcement — events flow through as
+plain dicts. Adding `events` is opt-in and backwards-compatible.
+
+Type checks: `TBool`, `TInt`, `TFloat`, `TString`, `TBytes`, `TUnit`, `TList`,
+`TRecord`, `TOption` (any), `TEnum` (membership). Other types pass through.
+
+### Migration — Schema Upgrades
+
+```python
+Migration(
+    from_version=1, to_version=2,
+    transform=With(Var("state"), (("currency", LStr("USD")),)),
+)
+# Spec(version=2, migrations=(...))
+# State with __schema_version__ < 2 auto-upgraded on Universe construction
+```
 
 ## Protocol DSL — Linear State Machines
 
-Linear FSMs are 60%+ of real specs. The Protocol DSL captures the pattern in one place:
+Linear FSMs are 60%+ of real specs. The Protocol DSL captures the pattern in one line.
 
 ```python
 from k3c import Protocol, Spec, Universe
@@ -172,184 +296,263 @@ from k3c import Protocol, Spec, Universe
 proto = Protocol(
     name="order",
     state_field="status",
-    states=("received", "classifying", "extracting", "committed"),
+    states=("draft", "placed", "paid", "shipped"),
     transitions=(
-        ("received", "CLASSIFY", "classifying"),
-        ("classifying", "EXTRACT", "extracting"),
-        ("extracting", "COMMIT", "committed"),
+        ("draft",   "Place", "placed"),
+        ("placed",  "Pay",   "paid"),
+        ("paid",    "Ship",  "shipped"),
     ),
 )
 
-# Plug auto-generated artifacts into Spec
 spec = Spec(
-    name="order_proc",
-    state0={"status": "received"},
-    events=proto.event_defs(),    # auto: EventDef per event type
-    permits=proto.permits(),      # auto: state-ordering Permit per transition
-    maintains=proto.maintains(),  # auto: status must be one of declared states
+    name="order",
+    state0={"status": "draft"},
+    events=proto.event_defs(),       # auto: EventDef per event type
+    permits=proto.permits(),          # auto: state-ordering guards
+    maintains=proto.maintains(),      # auto: status validity invariant
 )
 
-# Use the transition table for the user transition function
-table = proto.transition_table()
+# transition_table for the user transition
+TABLE = proto.transition_table()
 def transition(state, event):
-    new = table.get((state["status"], event["type"]))
+    new = TABLE.get((state["status"], event["type"]))
     return {**state, "status": new} if new else state
 ```
 
-## Rich Denial Messages — `denied=` IR Expression
-
-Default rejection messages are generic ("Permit X denied"). For real apps, set `denied=`
-to an IR expression that evaluates to a string with state and event context:
+## Universe API
 
 ```python
-from k3c import Permit, Concat, LStr, Field, Var
-
-Permit(
-    name="can_classify", on="CLASSIFY",
-    when=k3(S.stage == "RECEIVED"),
-    denied=Concat(
-        Concat(LStr("Cannot classify: stage is "), Field(Var("state"), "stage")),
-        LStr(", expected RECEIVED"),
-    ),
+u = Universe(
+    spec=spec,                  # Spec or CompiledSpec
+    transition=fn,              # (state, event) -> state
+    state=None,                 # override initial state (auto-migrated)
+    ctx=None,                   # override SpecCtx
+    id=None,                    # universe identifier
+    hash_fn="sha256",           # "sha256" | "blake2b" | "blake3" | "none"
+    validate=True,              # well-formedness check at construction
 )
-# why.message -> "Cannot classify: stage is COMMITTED, expected RECEIVED"
+
+# Core operations
+u.apply(event)                          # one step -> StepResult (Ok/Warning/Impossible/Violated)
+u.reduce(events)                        # fold; stops on first non-Ok/Warning
+u.reduce_all(events)                    # skips Impossible, stops on Violated -> ReduceAllResult
+u.stream(events)                        # iterator yielding each result
+u.stream_errors(events, on_error=...)   # iterator yielding only StepError
+
+# Reads (no copy)
+u.get("field")                           # single field read, no full state copy
+u.get("field", default=...)
+u.state                                  # full state (copy)
+u.ctx                                    # current SpecCtx
+u.reset()                                # back to initial state
+
+# Samsara (KC-3 — replay & trajectory)
+run = u.simulate(events)                # full RunResult with trajectory + traces
+replay = u.replay(events, expected_hashes=run.step_hashes)
+
+# Debug
+trace = u.explain(event)                # dry-run with eval trace, NO state mutation
+
+# Property-based testing (KC-5)
+report = u.fuzz(sequences=1000, steps=100, seed=42)
+
+# Composition (KC-4)
+u.compose(other, router)                # binary <||>
+u.bridge(target, mapper, mode="synchronous")   # cross-universe <->
+
+# Isolation
+isolated = u.isolate()                  # deep-copy, no shared state
 ```
 
-`denied=` is supported on `Permit`, `Maintain`, and `Validate`. The expression has
-access to state, event, and spec_state.
+### `hash_fn="none"` for Performance
 
-## Keyed Attestation (KC-6)
+Skips JSON serialization + hashing per step. Use for high-throughput processing
+where tamper-evidence isn't needed. `step_hash` is `""`. **Replay/Samsara/attestation require a real hash.**
 
-A plain hash chain proves internal consistency. Keyed attestation proves *who*
-signed it. KC-6 (regulatory-grade audit) requires this.
+## Error Streaming
+
+Every non-Ok result becomes a `StepError` with full identity (chunk, offset, why).
+Clients control flow via `ErrorAction`.
 
 ```python
-from k3c import HmacSigner, Ed25519Signer, AttestationBundle, verify_bundle
+from k3c import StepError, ErrorAction
 
-# Sign with HMAC-SHA256 (stdlib, no extra deps)
-signer = HmacSigner(key=b"secret-key-bytes", key_id="prod-2026")
+@dataclass(frozen=True)
+class StepError:
+    chunk_index: int
+    offset: int
+    result: Impossible | Violated | Warning
+    why: Why            # shortcut
+    is_violation: bool
 
-# Or Ed25519 (requires: pip install cryptography)
-# signer = Ed25519Signer(key=private_key_bytes, key_id="prod-2026")
+class ErrorAction(StrEnum):
+    SKIP = "skip"             # ignore, continue
+    ABORT_CHUNK = "abort_chunk"   # stop this chunk
+    ABORT_ALL = "abort_all"   # stop everything
 
-# Run a simulation, build a bundle from the trace
-u = Universe(spec=spec, transition=fn)
-run = u.simulate(events)
-bundle = AttestationBundle.from_run(run, signer=signer)
-
-# Serialize for storage/wire
-json_str = bundle.to_json()
-
-# Later — verify
-restored = AttestationBundle.from_dict(json.loads(json_str))
-result = verify_bundle(restored, verifier=signer)
-assert result.valid
-assert result.steps_verified == len(events)
+# Single universe
+for error in u.stream_errors(events, on_error=lambda e: ErrorAction.SKIP):
+    log(error.chunk_index, error.offset, error.why)
 ```
-
-`Signer` is a Protocol — `HmacSigner` (stdlib `hmac`) and `Ed25519Signer` (optional
-`cryptography`) ship with k3c. Custom signers (KMS, HSM, etc.) implement the Protocol.
-
-### Two-layer verification
-
-`verify_bundle()` runs two independent checks per step:
-
-1. **Content integrity**: recompute `step_hash` from the bundle's
-   `(prev_step_hash, state_before, event)` using the bundle's `hash_fn`, and
-   compare against the recorded `step_hash`. Catches tampering with `event` or
-   `state_before` even if the signature is forged.
-
-2. **Authenticity**: verify the signature over canonical
-   `(event, state_after, step_hash, result_kind)`. Catches signature forgery
-   and tampering with `state_after` or `result_kind` (which the chain alone
-   doesn't protect — e.g., the final step's `state_after`).
-
-Tamper modes caught: `state_before`, `state_after`, `event`, `step_hash`,
-`prev_step_hash`, `result_kind`, `signature`, `initial_state`. Each maps to a
-`failure_kind` ("content" or "signature") and identifies the offending step.
-
-### JSON-primitive discipline
-
-State and event values must be JSON primitives (`str`, `int`, `float`, `bool`,
-`None`, or `list`/`dict` thereof). `from_run()` raises `ValueError` with the
-offending field path if any value is opaque (custom dataclass, domain object).
-Convert to dicts before applying events:
-
-```python
-# BAD: opaque dataclass leaks into state — raises at attestation time
-def t(s, e):
-    return {**s, "customer": Customer("alice")}
-
-# GOOD: JSON-safe dict
-def t(s, e):
-    return {**s, "customer": {"name": "alice"}}
-```
-
-### Bundle wire format (v2)
-
-Each `SignedStep` records `state_before`, `state_after`, `prev_step_hash`,
-`step_hash`, `result_kind`, and `signature`. The bundle records `hash_fn` and
-`initial_step_hash`. This data is sufficient for an independent verifier to
-re-derive every step hash from inputs.
-
-### EmbeddedRuntime support
-
-`EmbeddedUniverse.simulate()`, `.replay()`, and `.get(field)` work the same
-as on plain `Universe`, so embedded runtimes can produce attestation bundles
-directly without dropping to the underlying `Universe`.
 
 ## N-way Composition
 
-`compose_many()` routes events to one of N named universes. `Pipeline` applies events
-to every stage in order.
+Three patterns for combining universes:
 
 ```python
-from k3c import compose_many, Pipeline
+from k3c import compose_many, Pipeline, BridgedUniverse, BridgeMode
 
-# Route by name — event goes to ONE universe
-commerce = compose_many(
+# 1. Route by name — event goes to ONE universe
+fix = compose_many(
     {"orders": order_u, "payments": payment_u, "audit": audit_u},
     router=lambda e: "audit" if e["type"].startswith("Audit") else "orders",
 )
 
-# Pipeline — event goes to EVERY stage in sequence
-pipe = Pipeline([analyzer, memory, service_graph, correlator])
-result = pipe.apply(event)  # short-circuits on first non-Ok
-```
+# 2. Pipeline — apply event to EVERY stage in order, short-circuits on non-Ok
+pipe = Pipeline([validate_u, transform_u, publish_u])
+result = pipe.apply(event)
 
-## Schema Migrations
-
-Specs accumulate fields over time. Declare migrations to upgrade old state:
-
-```python
-from k3c import Migration, Spec
-from k3c import Var, With, LStr
-
-spec = Spec(
-    name="bank",
-    state0={"balance": 100, "currency": "USD"},
-    version=2,                                # current schema version
-    migrations=(
-        Migration(
-            from_version=1, to_version=2,
-            transform=With(Var("state"), (("currency", LStr("USD")),)),
-        ),
+# 3. Bridge — source applies, then forwards transformed event to target
+bridged = BridgedUniverse(
+    source=order_u,
+    target=position_u,
+    mapper=lambda state_before, event, state_after: (
+        {"type": "PositionUpdate", "qty": state_after["filled"] - state_before["filled"]}
+        if event["type"] == "Fill" else None
     ),
+    mode=BridgeMode.SYNCHRONOUS,    # SYNCHRONOUS | ASYNC | BEST_EFFORT
 )
 
-# Old v1 state (no currency field) gets migrated automatically
-old_state = {"balance": 200, "__schema_version__": 1}
-u = Universe(spec=spec, transition=fn, state=old_state)
-# u.state -> {"balance": 200, "currency": "USD", "__schema_version__": 2}
+# Synchronous mode returns target outputs/projections merged into result.
+# state.{source, target} is the combined view.
 ```
 
-State carries `__schema_version__`. On Universe construction, migrations are applied
-in chain (1→2→3) until state matches `spec.version`.
+## Parallel Processing
+
+```python
+from k3c import parallel_reduce, ChunkSource
+
+# Derive sub-specs from DFA checkpoints, optionally relaxing invariants
+specs = [
+    base_spec.slice(from_state=cp, relax=["serial_continuity"])
+    for cp in checkpoints
+]
+
+# Workers run in parallel; on_error is called in MAIN process via supervisor
+result = parallel_reduce(
+    transition=fn,
+    specs=specs,
+    chunks=chunks,                              # list[list[event]] OR list[ChunkSource]
+    workers=8,
+    hash_fn="blake3",
+    on_error=lambda e: ErrorAction.ABORT_CHUNK if e.is_violation else ErrorAction.SKIP,
+)
+
+result.passed                       # bool
+result.total_processed              # int
+result.errors                       # tuple[StepError, ...]
+result.violations                   # only Violated
+result.impossible                   # only Impossible
+result.chunk_results                # tuple[ChunkResult, ...]
+result.states                       # final states from passing chunks
+
+# Lazy event production
+source = ChunkSource(produce=lambda: stream_from_disk(path, start, end))
+```
+
+## Spec.slice() — Sub-Spec Derivation
+
+```python
+sub = spec.slice(
+    from_state={"phase": "IN_CARRIER", "serial": 100},
+    events=["RT3", "RT4"],          # filter permits to these event types
+    relax=["serial_continuity"],     # drop named Maintain/Validate clauses
+)
+```
+
+**Semantics:**
+- `from_state` becomes new `state0`. Hash chain resets.
+- `SpecCtx` starts fresh. `before()` on first step returns Nothing.
+- `events` filters permits.
+- `relax` drops clauses by name (use when chunk-splitting breaks specific invariants).
+
+## Spec.decode_event() — Standalone Decode
+
+```python
+decoded = spec.decode_event(raw_bytes)
+# Returns dict — useful for inspecting fields without the full apply pipeline
+```
+
+## Decode Plans + Extractors
+
+Portable declarative field extraction.
+
+```python
+from k3c import (
+    ByteSlice, BitField, JsonPath, XmlPath, MapKey,
+    FieldNum, AvroField, ColumnName, ColumnIdx,
+    Computed, Switch, Identity,
+    DecodeIdentity, DecodeFields, DecodeDispatch,
+    TextEncoding,
+)
+
+# Byte-level with type cast
+ByteSlice(start=0, length=6, encoding=TextEncoding.ASCII, trim=True, cast="int")
+# cast: "int" | "float" | "bool" | None
+
+# Decode by extracting named fields
+DecodeFields(fields=(
+    ("type", ByteSlice(start=0, length=3)),
+    ("amount", MapKey(key="amount")),
+    ("derived", Computed(expr=Concat(LStr("RT"), Field(Var("event"), "type")))),
+))
+
+# Dispatch by discriminant
+DecodeDispatch(
+    discriminant=ByteSlice(start=0, length=1),
+    cases=(
+        ("1", header_decode),
+        ("2", body_decode),
+    ),
+    default="skip",       # unmatched -> Impossible
+    # default=fallback_plan
+)
+```
+
+## Keyed Attestation (KC-6)
+
+Two-layer verification: content integrity + signature authenticity.
+
+```python
+from k3c import HmacSigner, Ed25519Signer, AttestationBundle, verify_bundle
+
+signer = HmacSigner(key=b"secret-key-bytes", key_id="prod-2026")
+# Or: Ed25519Signer(key=private_key_bytes, key_id="prod-2026")
+
+run = u.simulate(events)
+bundle = AttestationBundle.from_run(run, signer=signer)
+
+# Wire format
+json_str = bundle.to_json()
+restored = AttestationBundle.from_dict(json.loads(json_str))
+
+# Verify
+result = verify_bundle(restored, verifier=signer)
+result.valid                    # True/False
+result.failure_kind             # "content" | "signature" | "algorithm" | "key_id"
+result.first_invalid_step       # int | None
+```
+
+**Tamper modes caught:** `state_before`, `state_after`, `event`, `step_hash`,
+`prev_step_hash`, `result_kind`, `signature`, `initial_state`, chain breaks.
+
+**JSON-primitive discipline:** State and event values must be JSON primitives
+(`str`, `int`, `float`, `bool`, `None`, `list`/`dict`). `from_run` raises
+`ValueError` with the offending field path on opaque values.
 
 ## Sub-Expression Diagnostics
 
-When `Always(Implies(And(A, B), C))` fails, `Why.messages` includes a tree showing
-which sub-clause evaluated to what:
+Failed Maintain clauses include a tree showing which sub-clause evaluated to what:
 
 ```
 Maintain 'complex_invariant' violated
@@ -367,824 +570,140 @@ diagnosis:
     200 => 200
 ```
 
-This makes debugging compound invariants tractable.
-
-## EventDef — Declared Event Structure
-
-Give events a typed schema:
-
-```python
-from k3c import EventDef, FieldDef
-from k3c.ir.types import TInt, TString
-
-events = (
-    EventDef(name="Withdraw", fields=(
-        FieldDef(name="amount", type=TInt()),
-        FieldDef(name="currency", type=TString()),
-    ), description="Withdraw funds from account"),
-)
-
-spec = Spec(name="bank", state0={"balance": 0}, events=events, ...)
-```
-
-EventDefs document the wire format, enable IDE autocomplete in tooling, and let
-generators emit type-safe stubs.
-
-## Spec Model
-
-Specs are frozen dataclasses. No Python callables, no builders. 100% serializable.
-
-```python
-@dataclass(frozen=True)
-class Spec:
-    name: str
-    state0: dict[str, object]                    # initial state (must be non-empty)
-    fields: tuple[FieldDef, ...] = ()            # domain field definitions
-    decode: DecodePlan | None = None             # declarative decoder
-    permits: tuple[Permit, ...] = ()             # G: guard clauses
-    requires: tuple[Require, ...] = ()           # U: spec_state advancement
-    maintains: tuple[Maintain, ...] = ()         # N+L: safety and liveness
-    projections: tuple[Projection, ...] = ()     # P: derived views
-    outputs: tuple[Output, ...] = ()             # post-causal output events
-    korrelator: Korrelator | None = None         # K: correctness measurement
-    protocol_start: str = "__start__"            # DFA entry point
-```
-
-### Permit (Guard)
-
-Controls which events are admitted.
-
-```python
-Permit(
-    name="has_funds",                             # rule name (appears in Why)
-    when=Compare(CmpOp.GE, ...),                  # K3l expression -> bool
-    on="Withdraw",                                # event type filter (None = all)
-)
-```
-
-### Require (Spec State Advancement)
-
-Advances the specification's internal state alongside the implementation.
-
-```python
-Require(
-    name="track_deposit",
-    on="Deposit",                                 # event type trigger
-    transition=With(                              # expression producing new spec_state
-        Var("spec_state"),
-        (("total", Arith(ArithOp.ADD, Field(Var("spec_state"), "total"), EventField("amount"))),),
-    ),
-)
-```
-
-### Maintain (Invariant / Liveness)
-
-The compiler routes maintain clauses by structure:
-
-| Expression Pattern | Routes To | Mechanism |
-|-------------------|-----------|-----------|
-| `Always(phi)` | **N** (safety) | Checked every step |
-| `Always(Within(phi, n))` | **N+Ctx** (bounded) | Timer in Ctx, expired = Violated |
-| `Always(Eventually(phi))` | **L** (liveness) | Unbounded temporal obligation |
-
-```python
-# Safety: balance must never go negative (error = Violated)
-Maintain(name="non_negative", expr=Always(Compare(CmpOp.GE, Field(Var("state"), "balance"), LInt(0))))
-
-# Warning severity: flags concern but continues processing (Warning result)
-Maintain(name="prefer_positive", expr=Always(Compare(CmpOp.GT, Field(Var("state"), "balance"), LInt(0))),
-         severity=Severity.WARNING)
-
-# Bounded liveness: must settle within 5 steps
-Maintain(name="settle_fast", expr=Always(Within(Compare(CmpOp.EQ, Field(Var("state"), "settled"), LBool(True)), 5)))
-
-# Liveness: must eventually reach terminal state
-Maintain(name="terminates", expr=Always(Eventually(Compare(CmpOp.EQ, Field(Var("state"), "done"), LBool(True)))))
-```
-
-### Validate (Event-Scoped Validation)
-
-Event-scoped checks with access to both state and EventField. Scoped to specific
-event types via `on=`. Supports structured error detail and severity levels.
-
-```python
-# Check event field value
-Validate(name="valid_airport", on="RT3",
-         check=Matches(EventField("departure_station"), r"^[A-Z]{3}$"),
-         field="departure_station", constraint="^[A-Z]{3}$")
-
-# Check event field against allowed values using In
-Validate(name="valid_phase", on="SetPhase",
-         check=In(EventField("phase"), (LStr("idle"), LStr("active"), LStr("done"))),
-         field="phase", constraint="one of: idle, active, done")
-
-# Warning severity — flags but continues
-Validate(name="large_amount", on="Withdraw",
-         check=Compare(CmpOp.LE, EventField("amount"), LInt(10000)),
-         severity=Severity.WARNING)
-
-# Cross-field: event field vs state
-Validate(name="airline_matches_carrier", on="RT4",
-         check=Compare(CmpOp.EQ, EventField("airline"), Field(Var("state"), "carrier")),
-         field="airline")
-```
-
-### Warning Result Type
-
-```python
-match u.apply(event):
-    case Ok(state=s):        ...  # success
-    case Warning(state=s, why=w):  # non-fatal issue, state still advances
-        log(w.rule, w.message)
-    case Impossible(why=w):  ...  # guard rejected
-    case Violated(why=w):    ...  # invariant broken
-```
-
-Warning is produced by `Maintain(severity=Severity.WARNING)` or
-`Validate(severity=Severity.WARNING)`. State advances, processing continues.
-
-### Projection (Derived View)
-
-Declarative computed views evaluated against state each step.
-
-```python
-Projection(name="net_worth", expr=Arith(ArithOp.SUB, Field(Var("state"), "assets"), Field(Var("state"), "liabilities")))
-```
-
-### Output (Post-Causal Event)
-
-Emitted after a successful transition. Deterministic and replay-safe.
-
-```python
-Output(name="receipt", expr=Record((("action", EventField("type")), ("amount", EventField("amount")))), on="Withdraw")
-```
-
-### Korrelator (Correctness Measurement)
-
-Compares implementation state against specification state.
-
-```python
-Korrelator(
-    actual=Field(Var("state"), "balance"),        # implementation
-    intended=Field(Var("spec_state"), "balance"), # specification
-    mode=CompareMode.EXACT,                       # EXACT or SUBSET
-)
-```
-
-### Spec.slice() (Parallel Derivation)
-
-Derive a sub-spec from a DFA checkpoint for parallel processing.
-
-```python
-sub_spec = spec.slice(
-    from_state={"phase": "IN_CARRIER", "serial": 100},  # new state0
-    events=["RT3", "RT4"],                               # filter permits to these types
-    relax=["serial_continuity"],                          # drop invariants that break across sub-chunks
-)
-```
-
-**Semantics:**
-- `from_state` becomes the new `state0`. Hash chain resets (fresh chain).
-- `SpecCtx` starts fresh. `Before("field")` on the first step returns `Nothing` (no previous state).
-- `events` filters permits to matching event types/names. If `None`, all permits carry forward.
-- `relax` drops named Maintain/Validate clauses. Use when splitting chunks would
-  break specific invariants (e.g., serial continuity across sub-chunks).
-- Korrelator, outputs, projections, and non-relaxed maintains carry forward unchanged.
-
-### Spec.decode_event() (Standalone Decode)
-
-Decode a raw event using the spec's decode plan without running the full apply pipeline.
-
-```python
-decoded = spec.decode_event(raw_bytes)
-# Returns dict — useful for inspecting fields, building outputs, or pre-filtering
-```
-
-## Expression IR (K3l)
-
-All expressions are frozen dataclasses. They form the declarative language used in permits, maintains, projections, outputs, requires, and korrelators.
-
-### Literals
-
-```python
-LBool(val=True)
-LInt(val=42)
-LFloat(val=3.14)
-LStr(val="hello")
-LList(elements=(LInt(1), LInt(2), LInt(3)))
-```
-
-### Variable Access
-
-```python
-Var("state")                    # variable from eval context
-Field(Var("state"), "balance")  # state.balance
-Index(Var("list"), 0)           # list[0]
-EventField("amount")           # event.amount (shorthand)
-Actual("balance")              # impl state field (korrelator context)
-Intended("balance")            # spec state field (korrelator context)
-```
-
-### Logic
-
-```python
-And(left, right)               # short-circuits on False/Nothing
-Or(left, right)                # short-circuits on True/Nothing
-Not(expr)
-If(cond, then, else_)          # ternary
-Implies(left, right)           # left => right
-AllOf(exprs=(e1, e2, e3))      # variadic AND — replaces nested And chains
-AnyOf(exprs=(e1, e2, e3))      # variadic OR — replaces nested Or chains
-In(expr, values=(v1, v2, v3))  # membership test — expr in {v1, v2, v3}
-```
-
-### Comparison
-
-```python
-Compare(op, left, right)
-# CmpOp: EQ, NE, LT, LE, GT, GE
-```
-
-### Arithmetic
-
-```python
-Arith(op, left, right)         # ArithOp: ADD, SUB, MUL, DIV (div by zero -> Nothing)
-Mod(left, right)               # modulo (div by zero -> Nothing)
-Negate(expr)                   # -x
-Abs(expr)                      # |x|
-Min(left, right)
-Max(left, right)
-```
-
-### Option Operations
-
-```python
-IsSome(expr)                   # absorbs Nothing -> Some(False)
-UnwrapOr(expr, default)        # extract or use default if Nothing
-```
-
-### Collections
-
-```python
-Length(expr)
-Contains(collection, element)
-ForAll(var, collection, predicate)    # universal quantifier
-Exists(var, collection, predicate)    # existential quantifier
-Map(var, collection, body)
-Filter(var, collection, predicate)
-Fold(init, collection, acc_var, elem_var, body)
-```
-
-### Strings
-
-```python
-Concat(left, right)
-Trim(expr)                     # strip whitespace
-Slice(expr, start, end)        # substring
-Matches(expr, pattern)         # regex match
-```
-
-### Records
-
-```python
-Record(fields=(("a", LInt(1)), ("b", LStr("x"))))    # construct {a: 1, b: "x"}
-With(base, updates=(("a", LInt(2)),))                 # functional update: {**base, a: 2}
-```
-
-### Temporal (Cross-Step)
-
-```python
-Before("field")                # field value from previous state
-After("field")                 # field value from current state
-Always(expr)                   # must hold every step (safety)
-Eventually(expr)               # must become true (liveness)
-Within(expr, n)                # must become true within n steps
-Until(left, right)             # left holds until right becomes true
-```
-
-### Annotation
-
-```python
-Named(name, expr)              # named sub-expression
-Described(description, expr)   # documented sub-expression
-```
-
-## Option[T] — Expression-Level Outcome
-
-eval() returns `Some(val)` or `Nothing(field, step_hash)`. Nothing propagates like NaN.
-
-```python
-Some(val=42)                   # value present
-Nothing(field="balance", step_hash="abc...")  # value absent
-
-# Nothing propagates through ALL compound expressions
-# IsSome absorbs it: IsSome(Nothing) -> Some(False)
-# UnwrapOr recovers: UnwrapOr(Nothing, default) -> Some(default)
-```
-
-## Universe API
-
-The main execution entry point.
-
-```python
-u = Universe(
-    spec=spec,                  # Spec or CompiledSpec
-    transition=fn,              # (state, event) -> state
-    state=None,                 # override initial state
-    ctx=None,                   # override initial SpecCtx
-    id=None,                    # universe identifier
-    hash_fn="sha256",           # "sha256" | "blake2b" | "blake3"
-    validate=True,              # check well-formedness at construction
-)
-
-# Core operations
-result = u.apply(event)                  # one causal step -> StepResult
-result = u.reduce(events)               # fold, stops on first non-Ok
-result = u.reduce_all(events)           # skip Impossible, stop on Violated -> ReduceAllResult
-results = u.stream(events)              # yield each result, stop after Violated
-errors = u.stream_errors(events)        # yield only errors (StepError), skip Ok
-
-# Samsara (KC-3 replay)
-run = u.simulate(events)                # full trajectory collection -> RunResult
-replay = u.replay(events, expected_hashes=run.step_hashes)  # determinism verification -> ReplayResult
-
-# Debugging
-trace = u.explain(event)                # dry-run with full eval trace (state NOT mutated)
-
-# Testing (KC-5)
-report = u.fuzz(sequences=1000, steps=100, seed=42)  # property-based testing
-
-# State management
-u.reset()                               # reset to initial state
-u.state                                  # current state (copy)
-u.get("field")                           # read single field without copying
-u.get("field", default)                  # with default
-u.ctx                                    # current SpecCtx
-
-# Composition (KC-4)
-composed = u.compose(other, router)      # parallel composition
-bridged = u.bridge(target, mapper, mode="synchronous")  # cross-universe propagation
-
-# Isolation
-isolated = u.isolate()                   # deep-copy isolation
-```
-
-### ReduceAllResult
-
-```python
-result = u.reduce_all(events)
-result.final       # StepResult — last result
-result.processed   # int — successful steps
-result.skipped     # list[tuple[int, Impossible]] — rejected events
-result.passed      # bool — no violations
-```
-
-### RunResult (Samsara)
-
-```python
-run = u.simulate(events)
-run.final_state     # dict — state after all events
-run.trajectory      # tuple[dict, ...] — state at each step
-run.traces          # tuple[TraceRecord, ...] — per-step trace records
-run.step_hashes     # tuple[str, ...] — for replay verification
-run.events          # tuple[dict, ...] — event sequence
-run.state_at(t)     # dict — state at logical time t
-run.trace_at(t)     # TraceRecord — trace at logical time t
-run.passed          # bool
-run.processed       # int
-run.skipped         # int (Impossible events)
-```
-
-### TraceRecord
-
-```python
-rec = run.trace_at(0)
-rec.t                   # int — logical time (0-indexed)
-rec.event               # dict
-rec.state_before        # dict
-rec.state_after         # dict | None (None if guard rejected)
-rec.step_hash           # str
-rec.result_kind         # "ok" | "impossible" | "violated"
-rec.guard_result        # (bool, str)
-rec.invariant_result    # (bool, str)
-rec.projections         # dict
-rec.outputs             # tuple[dict, ...]
-```
-
-### ReplayResult
-
-```python
-replay = u.replay(events, expected_hashes=hashes)
-replay.matched      # bool — all hashes matched
-replay.steps        # int — steps replayed
-replay.mismatches   # tuple[ReplayMismatch, ...] — divergences
-```
-
-## EmbeddedRuntime (Python Integration)
-
-Wraps a portable Spec with Python callables at the runtime boundary. The Spec remains pure data; hooks exist only at runtime.
-
-```python
-from k3c import EmbeddedRuntime
-
-runtime = EmbeddedRuntime(
-    spec=spec,
-    transition=fn,
-    projection_hooks={
-        "balance": lambda state, event, ctx: state["balance"],
-        "is_healthy": lambda state, event, ctx: state["balance"] > 50,
-    },
-    output_hooks={
-        "receipt": lambda state, event, new_state: (
-            {"type": "Receipt", "amount": event.get("amount")}
-            if event.get("type") == "Withdraw" else None
-        ),
-    },
-    decode_hook=None,           # (raw) -> dict
-    korrelate_hook=None,        # (impl_state, spec_state) -> bool
-    hash_fn="sha256",
-)
-
-u = runtime.universe()
-result = u.apply({"type": "Withdraw", "amount": 50})
-# result.projections["balance"] -> 50
-# result.outputs -> ({"type": "Receipt", "amount": 50},)
-```
-
-### Hook Signatures
-
-| Hook | Signature | Called When |
-|------|-----------|------------|
-| `projection_hooks` | `(state, event, ctx) -> object` | After every Ok result |
-| `output_hooks` | `(state, event, new_state) -> dict or None` | After every Ok result (None = skip) |
-| `decode_hook` | `(raw) -> dict` | Before guard check |
-| `korrelate_hook` | `(impl_state, spec_state) -> bool` | After transition (False = Violated) |
-
-## Composition (KC-4)
-
-### Compose (<||>)
-
-Parallel composition of two universes with event routing.
-
-```python
-def router(event: dict) -> str:
-    if event.get("type", "").startswith("Pay"):
-        return "right"
-    return "left"       # also supports "both"
-
-composed = order_u.compose(payment_u, router)
-result = composed.apply({"type": "AddItem", "price": 25})
-# composed.state -> {"left": order_state, "right": payment_state}
-```
-
-### Bridge (<->)
-
-Cross-universe event propagation with configurable failure semantics.
-
-```python
-from k3c import BridgedUniverse, BridgeMode, RetryPolicy, FallbackStrategy
-
-bridged = BridgedUniverse(
-    source=main_u,
-    target=audit_u,
-    mapper=lambda state, event, new_state: {
-        "type": "AuditEntry",
-        "action": event.get("type"),
-        "timestamp": event.get("ts"),
-    },
-    mode=BridgeMode.SYNCHRONOUS,    # SYNCHRONOUS | ASYNC | BEST_EFFORT
-    retry=RetryPolicy.fixed_delay(3, 100),
-    fallback=FallbackStrategy.DEAD_LETTER,
-)
-
-result = bridged.apply(event)
-# bridged.state -> {"source": main_state, "target": audit_state}
-```
-
-### Bridge Modes
-
-| Mode | Consistency | Delivery | Returns |
-|------|-------------|----------|---------|
-| Synchronous | Strong | Both succeed or neither | Combined state + target outputs/projections |
-| Async | Eventual | Source commits first | Source result only |
-| BestEffort | Weak | No delivery guarantee | Source result only |
-
-In synchronous mode, the target's `Ok` result flows back to the caller:
-
-```python
-result = bridged.apply(event)
-result.state                     # {"source": {...}, "target": {...}}
-result.outputs                   # source outputs + target outputs (merged)
-result.projections["target.x"]   # target projections namespaced with "target."
-```
-
-This enables patterns like an error universe whose outputs carry decisions back
-to the source.
-
-## Isolation
-
-Deep-copy isolation for thread-safe sessions, speculative execution, or parallel fuzz workers.
-
-```python
-isolated = u.isolate()          # deep-copied, no shared references
-result = isolated.apply(event)  # independent from original u
-```
-
-## Error Streaming
-
-Every non-Ok result produces a `StepError` with full identity — which chunk, which offset, which event, which rule.
-
-### StepError
-
-```python
-@dataclass(frozen=True)
-class StepError:
-    chunk_index: int                    # which chunk (0 for single universe)
-    offset: int                         # position within the event stream
-    result: Impossible | Violated       # the full result
-
-    why: Why                            # shortcut for result.why
-    is_violation: bool                  # True if Violated, False if Impossible
-```
-
-### ErrorAction — Client Controls Flow
-
-```python
-class ErrorAction(StrEnum):
-    SKIP = "skip"                       # skip this event, continue processing
-    ABORT_CHUNK = "abort_chunk"         # stop this chunk, others continue
-    ABORT_ALL = "abort_all"             # stop everything
-```
-
-### Universe.stream_errors()
-
-Stream only errors from a single universe. Ok results are consumed silently.
-
-```python
-# Default: skip Impossible, abort on Violated
-for error in u.stream_errors(events):
-    logger.warning(error.why.to_log_record())
-
-# Custom handler — client decides per error
-def handler(error: StepError) -> ErrorAction:
-    if error.is_violation:
-        alert(error.why.rule, error.why.message)
-        return ErrorAction.ABORT_ALL
-    log_skip(error.chunk_index, error.offset, error.why.event)
-    return ErrorAction.SKIP
-
-for error in u.stream_errors(events, on_error=handler):
-    process_error(error)
-```
-
-## Parallel Processing
-
-Process chunks in parallel using derived specs. Errors stream per-event with full identity.
-
-```python
-from k3c import parallel_reduce, ErrorAction, StepError
-
-specs = [unified_spec.slice(from_state=checkpoint, events=["RT3"]) for checkpoint in checkpoints]
-
-# With error callback — called per-event as errors happen
-def on_error(error: StepError) -> ErrorAction:
-    log(f"chunk={error.chunk_index} offset={error.offset} rule={error.why.rule}")
-    log(f"  event: {error.why.event}")
-    log(f"  state_before: {error.why.before}")
-    if error.is_violation:
-        return ErrorAction.ABORT_CHUNK
-    return ErrorAction.SKIP
-
-result = parallel_reduce(
-    transition=fn,
-    specs=specs,
-    chunks=chunks,
-    workers=4,
-    hash_fn="blake3",
-    on_error=on_error,
-)
-
-result.passed          # bool
-result.states          # list[dict] — final states from passing chunks
-result.errors          # tuple[StepError, ...] — all errors across all chunks
-result.violations      # tuple[StepError, ...] — only Violated errors
-result.impossible      # tuple[StepError, ...] — only Impossible errors
-result.chunk_results   # tuple[ChunkResult, ...] — per-chunk detail
-
-# Without on_error — defaults to skip Impossible, abort chunk on Violated
-result = parallel_reduce(transition=fn, specs=specs, chunks=chunks, workers=4)
-```
-
-**Parallel error streaming:** When `on_error` is provided with `workers > 1`, an error
-universe (supervisor thread) mediates between workers and the callback via queues.
-Workers block on each error until the supervisor responds with an `ErrorAction`.
-The callback always runs in the main process — full per-event flow control works
-in both sequential and parallel mode. Uses fork-based multiprocessing; falls back
-to sequential on platforms without fork (Windows).
-
-### ChunkResult
-
-```python
-cr = result.chunk_results[0]
-cr.chunk_index     # int
-cr.processed       # int — successful steps
-cr.errors          # tuple[StepError, ...] — errors in this chunk
-cr.final_state     # dict | None
-cr.passed          # bool — no violations and not aborted
-cr.aborted         # bool
-```
-
-## Explain (Debugging)
-
-Dry-run an event without mutating state. Returns full evaluation trace.
-
-```python
-trace = u.explain({"type": "Withdraw", "amount": 500})
-print(trace.summary())
-
-for entry in trace.trace:
-    print(f"{entry.phase}: {entry.clause} -> {entry.verdict}")
-    # Phases: decode, guard, transition, require, safety, korrelation, liveness, projection, output
-```
-
-## Fuzz Testing (KC-5)
-
-Property-based testing with automatic shrinking.
-
-```python
-u = Universe(spec=spec, transition=fn)
-report = u.fuzz(
-    sequences=1000,       # number of random event sequences
-    steps=100,            # events per sequence
-    seed=42,              # reproducible
-    max_violations=1,
-    shrink=True,          # delta-debugging minimization
-)
-
-if not report.passed:
-    v = report.violations[0]
-    print(f"Rule: {v.violated.why.rule}")
-    print(f"Shrunk from {len(v.original_sequence)} to {len(v.shrunk_sequence)} events")
-```
-
-## Extractors and Decode Plans
-
-Portable declarative field extraction for raw event decoding.
-
-### Extractor Types
-
-```python
-ByteSlice(start=0, length=10, encoding=TextEncoding.ASCII, trim=True, cast="int")
-# cast: "int" | "float" | "bool" | None — type coercion for extracted strings
-# ByteSlice(start=0, length=6, cast="int")  # "000003" -> 3
-BitField(byte_offset=0, bit_offset=3, width=5)
-JsonPath(path="$.data.value")
-XmlPath(path="/root/element")
-MapKey(key="field_name")
-FieldNum(number=1)          # protobuf
-AvroField(name="field")
-ColumnName(name="col")      # SQL
-ColumnIdx(index=0)
-Computed(expr=Arith(...))   # derived from other fields (evaluated in decode phase)
-# Computed fields are evaluated after non-Computed fields are extracted.
-# Context: event={already extracted fields}, raw={raw input}
-Switch(discriminant=MapKey("type"), cases=(("a", MapKey("a_value")), ("b", MapKey("b_value"))))
-Identity()                  # pass-through
-```
-
-### Decode Plans
-
-```python
-# Raw event is already a dict
-DecodeIdentity()
-
-# Extract named fields
-DecodeFields(fields=(
-    FieldDef(name="amount", type=TInt(), extract=MapKey("amount")),
-    FieldDef(name="station", type=TString(), extract=ByteSlice(start=36, length=3)),
-))
-
-# Dispatch by discriminant
-DecodeDispatch(
-    discriminant=ByteSlice(start=0, length=1),
-    cases=(
-        ("1", header_decode_plan),
-        ("2", carrier_decode_plan),
-    ),
-    default="skip",      # unmatched -> Impossible (clean rejection)
-    # default=fallback_plan  # or use a fallback DecodePlan
-    # default=None           # legacy: pass through with __discriminant__
-)
-```
-
-## Code Emission
-
-Emit K3l expressions as target-language source.
-
-```python
-from k3c import to_typescript, to_sql, to_python
-
-expr = Compare(CmpOp.GE, Field(Var("state"), "balance"), LInt(0))
-print(to_typescript(expr))   # (state.balance >= 0)
-print(to_sql(expr))          # (state.balance >= 0)
-print(to_python(expr))       # (state["balance"] >= 0)
-```
-
-## Type System
-
-Optional static type annotations for fields and schemas.
-
-```python
-TBool()                          # boolean
-TInt()                           # integer
-TFloat()                         # float
-TString()                        # string
-TUnit()                          # unit (no value)
-TBytes(length=200)               # binary data
-TDate(format=DateFormat.ISO8601) # date (ISO8601 | YYYYMMDD | SSIM)
-TTime(format=TimeFormat.HHMM)   # time (ISO8601 | HHMM | HHMMSS)
-TEnum(values=("A", "B", "C"))   # closed enum
-TRecord(fields={"a": TInt(), "b": TString()})
-TVariant(variants={"ok": TInt(), "err": TString()})
-TList(element=TInt())
-TOption(inner=TInt())
-TRef(name="MyType")             # named reference
-```
-
-## Errors
-
-```
-K3Error (base)
-  K3NothingException        — field absent (.field, .step_hash)
-  K3ViolatedException       — invariant broken (.why: Why)
-  K3WellFormednessError     — construction failed (.rule: int, .message: str)
-  K3BridgeError             — bridge delivery failed (.source_id, .target_id, .attempts)
-```
-
-Exceptions are never raised by apply() or eval(). They are caller opt-in only:
-
-```python
-result.why.raise_()        # Violated -> K3ViolatedException
-nothing.raise_()           # Nothing -> K3NothingException
-```
-
-## Why (Causal Record)
-
-Every non-Ok result carries a complete causal record.
-
-```python
-why = result.why
-why.rule           # str — which guard/invariant
-why.kind           # WhyKind: PERMIT | MISSING | MAINTAIN | KORRELATE | TIMER | LIVENESS
-why.message        # str — primary message
-why.messages       # tuple[str, ...] — all messages
-why.before         # dict — state before event
-why.after          # dict | None — state after (None if rejected)
-why.event          # dict — the event
-why.ctx            # SpecCtx
-why.expected       # dict | None — expected state (korrelation)
-why.step_hash      # str
-why.fingerprint    # str — SHA-256[:16] stable dedup key
-why.to_dict()      # dict — full serialization
-why.to_prompt()    # str — AI agent feedback format
-why.to_log_record() # dict — OTel-compatible structured log
-```
-
 ## State Management — Keep State Small
 
-Universe state should be minimal — only what is needed for guards, invariants, and transitions. Do NOT accumulate large results in state. Instead, use **outputs** and **projections** for streaming results to consumers.
+State is deep-copied and hashed every step. Don't accumulate large results in state —
+use **outputs** for streaming results to consumers.
 
 ```python
 # BAD — state grows unbounded
 def transition(state, event):
-    return {**state, "results": state["results"] + [event]}  # state bloats
+    return {**state, "results": state["results"] + [event]}
 
-# GOOD — state tracks only what invariants need, outputs stream results
+# GOOD — state stays small, outputs stream results
 spec = Spec(
-    name="processor",
+    name="proc",
     state0={"count": 0, "last_status": "idle"},
     outputs=(
-        Output(name="result", expr=Record((
-            ("event", EventField("type")),
-            ("value", EventField("value")),
-        ))),
+        Output(name="result", expr=Record((("event", EventField("type")),))),
     ),
-    ...
 )
 
-# Consume outputs from Ok results
 for result in u.stream(events):
-    match result:
-        case Ok(outputs=outputs):
-            for out in outputs:
-                send_downstream(out)  # stream out, don't store
+    if isinstance(result, Ok):
+        for out in result.outputs:
+            send_downstream(out)
 ```
 
-State is deep-copied on every step and hashed into the chain. Large state means slow hashing, slow isolation, and high memory usage. Outputs and projections are computed once and discarded — they don't accumulate.
+## Expression IR (K3l)
+
+All expressions are frozen dataclasses. Use sugar (`S`/`E`/`k3`) for ergonomics.
+
+### Literals
+```python
+LBool(True), LInt(42), LFloat(3.14), LStr("hello"), LNull(), LList((LInt(1), LInt(2)))
+```
+
+### Variables / Field Access
+```python
+Var("state"), Field(Var("state"), "balance"), Index(expr, 0)
+EventField("amount"), Actual("balance"), Intended("balance")
+```
+
+### Logic
+```python
+And, Or, Not, If, Implies, AllOf, AnyOf, In
+```
+
+### Comparison / Arithmetic
+```python
+Compare(CmpOp.GE, ..., ...)        # CmpOp: EQ NE LT LE GT GE
+Arith(ArithOp.ADD, ..., ...)        # ArithOp: ADD SUB MUL DIV
+Mod, Negate, Abs, Min, Max
+```
+
+### Option Operations
+```python
+IsSome(expr)                         # Nothing -> Some(False)
+UnwrapOr(expr, default)              # Nothing -> default
+```
+
+### Collections
+```python
+Length, Contains, ForAll, Exists, Map, Filter, Fold
+```
+
+### Strings
+```python
+Concat(left, right)                  # auto-coerces non-strings
+Trim(expr)
+Str(expr)                            # explicit string coercion
+Slice(expr, start, end)
+Matches(expr, pattern)               # regex
+```
+
+### Records
+```python
+Record(fields=(("a", LInt(1)),))
+With(base, updates=(("a", LInt(2)),))   # functional update
+```
+
+### Temporal
+```python
+Before("field"), After("field")
+Always(expr), Eventually(expr), Within(expr, n), Until(left, right)
+```
+
+## Option[T]
+
+`eval()` returns `Some(val)` or `Nothing(field, step_hash)`. Nothing propagates like NaN.
+
+```python
+Some(val=42)
+Nothing(field="balance", step_hash="abc...")
+# IsSome absorbs Nothing -> Some(False)
+# UnwrapOr recovers: UnwrapOr(Nothing, default) -> Some(default)
+```
+
+## Why — Causal Record
+
+Every non-Ok result carries a complete causal record:
+
+```python
+why.rule           # str — guard/invariant/validate name
+why.kind           # WhyKind: PERMIT | MISSING | MAINTAIN | KORRELATE | TIMER | LIVENESS
+why.message        # str — primary message
+why.messages       # tuple[str, ...] — all messages (incl. diagnosis tree)
+why.before         # dict — state before event
+why.after          # dict | None
+why.event          # dict
+why.ctx            # SpecCtx
+why.expected       # dict | None — for korrelation failures
+why.step_hash      # str
+why.fingerprint    # str — SHA-256[:16] stable dedup key
+why.to_dict()      # full serialization
+why.to_prompt()    # AI agent feedback format
+why.to_log_record() # OTel-compatible structured log
+```
+
+## Serialization
+
+```python
+from k3c import (
+    expr_to_dict, expr_from_dict,    # Expr
+    type_to_dict, type_from_dict,    # ExprType
+    spec_to_dict, spec_from_dict,    # Full Spec (all clauses, extractors, decodes)
+)
+
+# Round-trip a full spec through JSON
+d = spec_to_dict(spec)
+json_str = json.dumps(d, indent=2)
+restored = spec_from_dict(json.loads(json_str))
+```
 
 ## Determinism Rules
 
-G, T, N, P must be pure. Forbidden in transitions:
+G, T, N, P, V must be pure. Forbidden in transitions:
 
 - `datetime.now()` — timestamps must arrive in event payloads
 - `random.random()` — use PRNG seed in state, advance deterministically
@@ -1204,259 +723,58 @@ Checked at Universe construction (validate=True):
 5. eval() is total (guaranteed by Option)
 6. Transition is closed (N catches violations)
 7. Invariant check is total (guaranteed by StepResult)
-8. Preservation: `N(s) and G(s,e) => N(T(s,e))` — discharged by fuzz() or verify()
+8. Preservation: `N(s) and G(s,e) => N(T(s,e))` — discharged by `fuzz()` or `verify()`
 
 ## KC Compliance Levels
 
-| Level | Name | Adds |
-|-------|------|------|
-| KC-1 | Core Semantics | S, S0, E, G, T, N |
-| KC-2 | Observable | + P (projections) |
-| KC-3 | Traceable | + Samsara (replay, trajectory) |
-| KC-4 | Compositional | + Compose (<||>), Bridge (<->) |
-| KC-5 | Verified | + Fuzz, property-based testing |
-| KC-6 | Certified | + Signed step_hash chain |
+| Level | Adds |
+|-------|------|
+| KC-1 | Core semantics: S, S0, E, G, T, N |
+| KC-2 | + Projections (P) |
+| KC-3 | + Samsara (replay, trajectory) |
+| KC-4 | + Compose, Bridge |
+| KC-5 | + Fuzz, property-based testing |
+| KC-6 | + Keyed attestation (HMAC, Ed25519) |
 
-## Patterns and Recipes
-
-### State Machine with Protocol Guards
-
-```python
-spec = Spec(
-    name="order",
-    state0={"status": "pending", "total": 0},
-    permits=(
-        Permit(name="confirm_when_pending",
-               when=Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("pending")),
-               on="Confirm"),
-        Permit(name="ship_when_confirmed",
-               when=Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("confirmed")),
-               on="Ship"),
-    ),
-    maintains=(
-        Maintain(name="valid_status",
-                 expr=Always(Or(
-                     Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("pending")),
-                     Or(Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("confirmed")),
-                        Compare(CmpOp.EQ, Field(Var("state"), "status"), LStr("shipped")))))),
-    ),
-)
-```
-
-### Conservation Invariant
-
-```python
-Maintain(
-    name="conservation",
-    expr=Always(Compare(
-        CmpOp.EQ,
-        Arith(ArithOp.ADD, Field(Var("state"), "sold"), Field(Var("state"), "stock")),
-        Field(Var("state"), "total_received"),
-    )),
-)
-```
-
-### Monotonicity (Term Never Decreases)
-
-```python
-Maintain(
-    name="term_monotone",
-    expr=Always(Compare(CmpOp.GE, After("term"), Before("term"))),
-)
-```
-
-### Bounded Liveness (Must Settle Within N Steps)
-
-```python
-Maintain(
-    name="settle_fast",
-    expr=Always(Within(
-        Compare(CmpOp.EQ, Field(Var("state"), "settled"), LBool(True)),
-        5,  # within 5 steps
-    )),
-)
-```
-
-### Korrelation with Require
-
-```python
-spec = Spec(
-    name="tracked",
-    state0={"count": 0},
-    requires=(
-        Require(name="track_inc", on="Inc",
-                transition=With(Var("spec_state"),
-                    (("count", Arith(ArithOp.ADD, Field(Var("spec_state"), "count"), LInt(1))),))),
-    ),
-    korrelator=Korrelator(
-        actual=Field(Var("state"), "count"),
-        intended=Field(Var("spec_state"), "count"),
-        mode=CompareMode.EXACT,
-    ),
-    ...
-)
-```
-
-### Streaming with Outputs
-
-```python
-u = runtime.universe()
-for result in u.stream(events):
-    match result:
-        case Ok(outputs=outputs, projections=projections):
-            for out in outputs:
-                process_output(out)
-            monitor(projections)
-        case Impossible(why=w):
-            log_skip(w.rule, w.message)
-        case Violated(why=w):
-            alert(w.rule, w.message)
-            break
-```
-
-### Simulate + Replay (KC-3 Samsara)
-
-```python
-# Simulate with full trajectory
-u = Universe(spec=spec, transition=fn)
-run = u.simulate(events)
-
-# Inspect trajectory
-for t in range(run.processed):
-    print(f"Step {t}: {run.state_at(t)}")
-
-# Replay for determinism verification
-u2 = Universe(spec=spec, transition=fn)
-replay = u2.replay(events, expected_hashes=run.step_hashes)
-assert replay.passed  # deterministic: same inputs -> same hashes
-```
-
-### Compose + Bridge (KC-4)
-
-```python
-# Two domains composed with routing
-def router(event):
-    return "right" if event.get("type").startswith("Pay") else "left"
-
-commerce = order_u.compose(payment_u, router)
-
-# Bridge composed system to audit log
-audited = commerce.bridge(
-    audit_u,
-    mapper=lambda s, e, ns: {"type": "AuditEntry", "action": e.get("type")},
-    mode="synchronous",
-)
-```
-
-### Fuzz Testing (KC-5)
-
-```python
-u = Universe(spec=spec, transition=fn)
-report = u.fuzz(sequences=500, steps=50, seed=42)
-if not report.passed:
-    v = report.violations[0]
-    print(f"Violation of {v.violated.why.rule}")
-    print(f"Minimal reproducer: {v.shrunk_sequence}")
-```
-
-### Parallel Processing
-
-```python
-# Derive sub-specs from DFA checkpoints
-specs = [spec.slice(from_state=cp, events=active_events) for cp in checkpoints]
-
-result = parallel_reduce(transition=fn, specs=specs, chunks=chunks, workers=8)
-assert result.passed
-```
-
-### Isolation for Sessions
-
-```python
-# Create independent sessions from one spec
-sessions = [Universe(spec=spec, transition=fn).isolate() for _ in range(10)]
-for session in sessions:
-    session.apply({"type": "Login", "user": "alice"})  # independent
-```
-
-## Serialization
-
-Specs, expressions, and types round-trip to JSON.
-
-```python
-from k3c import (
-    expr_to_dict, expr_from_dict,   # Expr <-> dict
-    type_to_dict, type_from_dict,   # ExprType <-> dict
-    spec_to_dict, spec_from_dict,   # Spec <-> dict (full spec with all clauses)
-)
-
-# Expression round-trip
-d = expr_to_dict(Compare(CmpOp.GE, Field(Var("state"), "x"), LInt(0)))
-expr = expr_from_dict(d)
-
-# Type round-trip
-d = type_to_dict(TRecord(fields={"x": TInt(), "y": TString()}))
-t = type_from_dict(d)
-
-# Full Spec round-trip (includes Permits, Maintains, Validates, decode plans, etc.)
-d = spec_to_dict(spec)
-json_str = json.dumps(d, indent=2)   # JSON-ready
-spec = spec_from_dict(json.loads(json_str))
-```
-
-`spec_to_dict` / `spec_from_dict` covers all clause types: Permit, Require,
-Maintain (with severity), Validate (with field/constraint), Projection, Output,
-Korrelator, FieldDef, all Extractor types, and all DecodePlan types.
-Defaults are omitted from output (severity="error", protocol_start="__start__", etc.).
-
-## Hash Chain
-
-Every step produces a chained hash. Altering any step changes all subsequent hashes.
-
-```python
-u = Universe(spec=spec, transition=fn, hash_fn="sha256")  # default
-u = Universe(spec=spec, transition=fn, hash_fn="blake2b")  # ~2x faster
-u = Universe(spec=spec, transition=fn, hash_fn="blake3")   # ~4-6x faster (requires pip install blake3)
-u = Universe(spec=spec, transition=fn, hash_fn="none")     # skip hashing — max throughput, no replay
-```
-
-`hash_fn="none"` skips JSON serialization + hashing entirely. Use for high-throughput
-processing where tamper-evidence isn't needed. `step_hash` will be `""`.
-Replay and Samsara require a real hash function.
-
-## Complete API Reference
-
-### Top-Level Imports
+## Top-Level Imports
 
 ```python
 from k3c import (
     # Spec model
-    Spec, FieldDef, Permit, Require, Maintain, Validate, Severity,
-    Projection, Output, Korrelator, CompareMode,
-    # Extractors
-    ByteSlice, BitField, JsonPath, XmlPath, MapKey, FieldNum, AvroField, ColumnName, ColumnIdx,
-    Computed, Switch, Identity, TextEncoding, DecodeIdentity, DecodeFields, DecodeDispatch,
-    # Engine
-    SpecCtx, Ok, Impossible, Violated, Warning, Why, WhyKind, StepResult,
+    Spec, FieldDef, EventDef, Permit, Require, Maintain, Validate, Migration,
+    Severity, Projection, Output, Korrelator, CompareMode,
+    # Sugar
+    S, E, SS, Q, k3, lit, all_of, any_of, before, after,
+    # Protocol DSL
+    Protocol,
+    # Result types
+    Ok, Warning, Impossible, Violated, Why, WhyKind, StepResult,
     StepError, ErrorAction, ErrorHandler,
-    TransitionFn, apply_step,
-    # Expressions (all 43 nodes)
-    Expr, LBool, LInt, LFloat, LStr, LList,
+    # Engine
+    SpecCtx, TransitionFn, apply_step,
+    # Expressions
+    Expr, LBool, LInt, LFloat, LStr, LNull, LList,
     Var, Field, Index, EventField, Actual, Intended,
     And, Or, Not, If, Implies, AllOf, AnyOf, In,
     Compare, CmpOp, Arith, ArithOp, Mod, Negate, Abs, Min, Max,
     IsSome, UnwrapOr,
     ForAll, Exists, Length, Contains, Map, Filter, Fold,
-    Concat, Trim, Slice, Matches,
+    Concat, Trim, Str, Slice, Matches,
     Record, With,
     Before, After, Always, Eventually, Within, Until,
     Named, Described,
-    # Option types
+    # Option
     Some, Nothing, K3Option,
-    # Type system (14 nodes)
+    # Type system
     ExprType, TBool, TInt, TString, TFloat, TUnit, TBytes, TDate, TTime,
     TEnum, TRecord, TVariant, TList, TOption, TRef, DateFormat, TimeFormat,
+    # Extractors / Decode
+    ByteSlice, BitField, JsonPath, XmlPath, MapKey, FieldNum, AvroField,
+    ColumnName, ColumnIdx, Computed, Switch, Identity, TextEncoding,
+    DecodeIdentity, DecodeFields, DecodeDispatch,
     # Runtime
-    Universe, ReduceAllResult, Applyable, ComposedUniverse,
+    Universe, ReduceAllResult,
+    Applyable, ComposedUniverse, ManyUniverse, Pipeline, compose_many,
     BridgedUniverse, BridgeMode, FallbackStrategy, RetryPolicy,
     EmbeddedRuntime, EmbeddedUniverse,
     IsolatedUniverse,
@@ -1467,6 +785,9 @@ from k3c import (
     ExplainResult,
     # Testing
     FuzzReport, FuzzViolation,
+    # Attestation (KC-6)
+    Signer, HmacSigner, Ed25519Signer,
+    AttestationBundle, SignedStep, VerifyResult, verify_bundle,
     # Serde
     expr_to_dict, expr_from_dict, type_to_dict, type_from_dict,
     spec_to_dict, spec_from_dict,
@@ -1476,3 +797,23 @@ from k3c import (
     K3Error, K3NothingException, K3ViolatedException, K3WellFormednessError, K3BridgeError,
 )
 ```
+
+## Examples (`examples/`)
+
+| File | Demonstrates |
+|------|-------------|
+| `01_counter.py` | Basics, sugar, `apply`, `simulate`, `get` |
+| `02_bank_account.py` | Permits with `denied=`, Maintain severity (Warning) |
+| `03_state_machine.py` | Protocol DSL — auto-generated permits/events/maintains |
+| `04_inventory.py` | Validate clause, Outputs, conservation invariants |
+| `05_rate_limiter.py` | Sugar with rich `denied=` messages |
+| `06_compose_bridge.py` | `compose_many`, `Pipeline`, synchronous Bridge |
+| `07_raft_consensus.py` | Real-world safety + sub-expression diagnostics |
+| `08_parallel_processing.py` | `parallel_reduce` + `slice(relax=)` + error streaming |
+| `09_isolation.py` | `u.isolate()` for thread-safe sessions |
+| `10_fix_protocol.py` | FIX session + order management, Validate, Bridge |
+| `11_redis_protocol.py` | Redis SET/GET/MULTI/EXEC, Validate, Outputs |
+| `12_attestation.py` | KC-6 keyed attestation + tamper detection |
+| `13_migration.py` | Schema migrations across versions |
+| `14_fuzz_explain.py` | `u.fuzz()`, `u.explain()`, sub-expression diagnostics |
+| `15_serde.py` | Full Spec → JSON → Spec round-trip |
